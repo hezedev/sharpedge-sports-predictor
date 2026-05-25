@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sports Predictor — API Manager</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+
+  header { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 20px 32px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 20px; font-weight: 700; color: #fff; }
+  header span { font-size: 13px; color: #718096; background: #2d3748; padding: 3px 10px; border-radius: 99px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 20px; padding: 28px 32px; }
+
+  .card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 12px; overflow: hidden; transition: border-color .2s; }
+  .card:hover { border-color: #4a5568; }
+
+  .card-header { padding: 16px 20px 12px; display: flex; align-items: flex-start; justify-content: space-between; }
+  .card-title { display: flex; align-items: center; gap: 10px; }
+  .card-title .icon { font-size: 22px; }
+  .card-title h2 { font-size: 15px; font-weight: 600; color: #fff; }
+  .card-title p { font-size: 12px; color: #718096; margin-top: 2px; }
+
+  .badge { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 99px; white-space: nowrap; }
+  .badge-green  { background: #1a3a2a; color: #48bb78; border: 1px solid #276749; }
+  .badge-yellow { background: #3d2e00; color: #ecc94b; border: 1px solid #744210; }
+  .badge-red    { background: #3d1a1a; color: #fc8181; border: 1px solid #742a2a; }
+  .badge-blue   { background: #1a2a3d; color: #63b3ed; border: 1px solid #2b4f80; }
+  .badge-gray   { background: #2d3748; color: #a0aec0; border: 1px solid #4a5568; }
+
+  .card-body { padding: 0 20px 16px; }
+
+  .quota-bar { margin: 4px 0 10px; }
+  .quota-label { display: flex; justify-content: space-between; font-size: 12px; color: #a0aec0; margin-bottom: 5px; }
+  .quota-label strong { color: #e2e8f0; }
+  .bar-bg { background: #2d3748; border-radius: 99px; height: 6px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 99px; transition: width .4s; }
+  .bar-green  { background: linear-gradient(90deg, #38a169, #48bb78); }
+  .bar-yellow { background: linear-gradient(90deg, #d69e2e, #ecc94b); }
+  .bar-red    { background: linear-gradient(90deg, #c53030, #fc8181); }
+
+  .meta-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .meta-chip { font-size: 11px; color: #a0aec0; background: #2d3748; padding: 3px 8px; border-radius: 6px; }
+  .meta-chip strong { color: #e2e8f0; }
+
+  .key-row { margin-top: 12px; display: flex; align-items: center; gap: 8px; }
+  .key-row label { font-size: 11px; color: #718096; min-width: 30px; }
+  .key-display { flex: 1; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; background: #0f1117; border: 1px solid #2d3748; border-radius: 6px; padding: 6px 10px; color: #68d391; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; transition: border-color .2s; }
+  .key-display:hover { border-color: #4a5568; }
+  .copy-btn { background: #2d3748; border: none; color: #a0aec0; font-size: 12px; padding: 6px 10px; border-radius: 6px; cursor: pointer; transition: background .2s; white-space: nowrap; }
+  .copy-btn:hover { background: #4a5568; color: #fff; }
+  .copy-btn.copied { background: #276749; color: #48bb78; }
+
+  .section-title { font-size: 12px; font-weight: 600; color: #718096; text-transform: uppercase; letter-spacing: .08em; margin: 28px 32px 0; }
+
+  .endpoints { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .endpoint { font-size: 11px; color: #718096; font-family: monospace; background: #0f1117; padding: 4px 8px; border-radius: 4px; }
+
+  .actions { display: flex; gap: 8px; margin-top: 14px; }
+  .btn { font-size: 12px; padding: 6px 14px; border-radius: 7px; border: none; cursor: pointer; font-weight: 500; transition: all .15s; }
+  .btn-primary { background: #3182ce; color: #fff; }
+  .btn-primary:hover { background: #2b6cb0; }
+  .btn-secondary { background: #2d3748; color: #a0aec0; }
+  .btn-secondary:hover { background: #4a5568; color: #fff; }
+
+  .summary-bar { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 12px; margin: 16px 32px; padding: 18px 24px; display: flex; gap: 32px; flex-wrap: wrap; align-items: center; }
+  .stat { text-align: center; }
+  .stat-val { font-size: 24px; font-weight: 700; color: #fff; }
+  .stat-lbl { font-size: 11px; color: #718096; margin-top: 2px; }
+  .divider { width: 1px; background: #2d3748; align-self: stretch; }
+
+  .toast { position: fixed; bottom: 24px; right: 24px; background: #276749; color: #68d391; font-size: 13px; padding: 10px 18px; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity .3s; z-index: 999; }
+  .toast.show { opacity: 1; }
+
+  @media (max-width: 600px) { .grid { padding: 16px; } .summary-bar { margin: 16px; gap: 16px; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🔑 API Manager</h1>
+  </div>
+  <span id="last-refresh">Loading...</span>
+</header>
+
+<!-- Summary bar -->
+<div class="summary-bar">
+  <div class="stat">
+    <div class="stat-val" id="total-apis">7</div>
+    <div class="stat-lbl">Total APIs</div>
+  </div>
+  <div class="divider"></div>
+  <div class="stat">
+    <div class="stat-val" id="active-count" style="color:#48bb78">—</div>
+    <div class="stat-lbl">Active</div>
+  </div>
+  <div class="divider"></div>
+  <div class="stat">
+    <div class="stat-val" id="warn-count" style="color:#ecc94b">—</div>
+    <div class="stat-lbl">Low Quota</div>
+  </div>
+  <div class="divider"></div>
+  <div class="stat">
+    <div class="stat-val" id="odds-remaining" style="color:#63b3ed">—</div>
+    <div class="stat-lbl">Odds API Left</div>
+  </div>
+  <div class="divider"></div>
+  <div class="stat">
+    <div class="stat-val" id="odds-pct" style="color:#63b3ed">—</div>
+    <div class="stat-lbl">Quota Used</div>
+  </div>
+</div>
+
+<div class="section-title">Live APIs (quota-tracked)</div>
+<div class="grid" id="live-grid"></div>
+
+<div class="section-title" style="margin-top:24px">Free / No-Auth APIs</div>
+<div class="grid" id="free-grid"></div>
+
+<div class="section-title" style="margin-top:24px">Notification</div>
+<div class="grid" id="notif-grid"></div>
+
+<div class="toast" id="toast">Copied!</div>
+
+<script>
+const ENV_PATH = '.env'; // relative to this file
+
+// ── API definitions ──────────────────────────────────────────────────────────
+const APIs = [
+  // ── LIVE / QUOTA-TRACKED ─────────────────────────────────────────────────
+  {
+    id: 'odds',
+    group: 'live',
+    icon: '📊',
+    name: 'The Odds API',
+    description: 'Pre-match odds for all sports',
+    keyEnv: 'ODDS_API_KEY',
+    key: '',
+    tier: 'Free 500 req/month',
+    tierClass: 'badge-yellow',
+    quotaMax: 500,
+    quotaUsed: null,   // fetched live
+    quotaUnit: 'req/month',
+    resetPeriod: 'Monthly',
+    rateLimit: 'No hard rate limit',
+    docs: 'https://the-odds-api.com/liveapi/guides/v4/',
+    endpoints: [
+      'GET /v4/sports',
+      'GET /v4/sports/{sport}/odds',
+      'GET /v4/usage',
+    ],
+    usedBy: ['daily_scan.py', 'src/data/odds_fetcher.py'],
+    liveCheck: true,
+  },
+  {
+    id: 'football',
+    group: 'live',
+    icon: '⚽',
+    name: 'Football-Data.org',
+    description: 'Soccer match results & fixtures',
+    keyEnv: 'FOOTBALL_DATA_API_KEY',
+    key: '',
+    tier: 'Free 10 req/min',
+    tierClass: 'badge-green',
+    quotaMax: null,
+    quotaUnit: 'req/min',
+    resetPeriod: 'Per-minute rolling',
+    rateLimit: '10 req/min',
+    docs: 'https://www.football-data.org/documentation/quickstart',
+    endpoints: [
+      'GET /v4/competitions/{id}/matches',
+      'GET /v4/competitions/{id}/standings',
+    ],
+    usedBy: ['src/data/soccer_fetcher.py'],
+    liveCheck: false,
+  },
+  {
+    id: 'balldontlie',
+    group: 'live',
+    icon: '🏀',
+    name: 'BallDontLie',
+    description: 'NBA game results & team stats',
+    keyEnv: 'BALLDONTLIE_API_KEY',
+    key: '',
+    tier: 'Free tier',
+    tierClass: 'badge-green',
+    quotaMax: null,
+    quotaUnit: 'Unlimited (throttled)',
+    resetPeriod: 'N/A',
+    rateLimit: '~60 req/min',
+    docs: 'https://www.balldontlie.io/home.html#introduction',
+    endpoints: [
+      'GET /v1/games',
+      'GET /v1/teams',
+      'GET /v1/players',
+    ],
+    usedBy: ['src/data/balldontlie_fetcher.py'],
+    liveCheck: false,
+  },
+  {
+    id: 'apisports',
+    group: 'live',
+    icon: '🏟️',
+    name: 'API-Sports',
+    description: 'Football / Basketball / Tennis stats',
+    keyEnv: 'API_SPORTS_KEY',
+    key: '',
+    tier: 'Free 100 req/day',
+    tierClass: 'badge-yellow',
+    quotaMax: 100,
+    quotaUsed: null,
+    quotaUnit: 'req/day',
+    resetPeriod: 'Daily midnight UTC',
+    rateLimit: '100 req/day',
+    docs: 'https://api-sports.io/documentation/football/v3',
+    endpoints: [
+      'GET /fixtures',
+      'GET /standings',
+      'GET /players/statistics',
+    ],
+    usedBy: ['src/data/basketball_fetcher.py'],
+    liveCheck: false,
+  },
+  {
+    id: 'rapidapi',
+    group: 'live',
+    icon: '⚡',
+    name: 'RapidAPI (API-NBA)',
+    description: 'NBA live data via RapidAPI gateway',
+    keyEnv: 'RAPIDAPI_KEY',
+    key: '',
+    tier: 'Free plan',
+    tierClass: 'badge-green',
+    quotaMax: null,
+    quotaUnit: 'Varies by endpoint',
+    resetPeriod: 'Monthly',
+    rateLimit: 'Varies',
+    docs: 'https://rapidapi.com/api-sports/api/api-nba/',
+    endpoints: [
+      'GET /games',
+      'GET /teams/statistics',
+    ],
+    usedBy: ['src/data/basketball_fetcher.py'],
+    liveCheck: false,
+  },
+  // ── FREE / NO-AUTH ────────────────────────────────────────────────────────
+  {
+    id: 'mlb',
+    group: 'free',
+    icon: '⚾',
+    name: 'MLB Stats API',
+    description: 'Official MLB game data — no key required',
+    keyEnv: null,
+    key: null,
+    tier: 'Free & public',
+    tierClass: 'badge-blue',
+    quotaMax: null,
+    quotaUnit: 'No hard limit',
+    resetPeriod: 'N/A',
+    rateLimit: 'Be polite (0.2s delay)',
+    docs: 'https://statsapi.mlb.com/',
+    endpoints: [
+      'GET /api/v1/schedule',
+      'GET /api/v1/game/{gamePk}/boxscore',
+      'GET /api/v1/standings',
+    ],
+    usedBy: ['src/data/mlb_fetcher.py'],
+    liveCheck: false,
+  },
+  {
+    id: 'nhl',
+    group: 'free',
+    icon: '🏒',
+    name: 'NHL Web API',
+    description: 'Official NHL game data — no key required',
+    keyEnv: null,
+    key: null,
+    tier: 'Free & public',
+    tierClass: 'badge-blue',
+    quotaMax: null,
+    quotaUnit: 'No hard limit',
+    resetPeriod: 'N/A',
+    rateLimit: 'Be polite (0.15s delay)',
+    docs: 'https://api-web.nhle.com/',
+    endpoints: [
+      'GET /v1/schedule/{date}',
+      'GET /v1/standings/{date}',
+    ],
+    usedBy: ['src/data/nhl_fetcher.py'],
+    liveCheck: false,
+  },
+  // ── NOTIFICATIONS ─────────────────────────────────────────────────────────
+  {
+    id: 'telegram',
+    group: 'notif',
+    icon: '📱',
+    name: 'Telegram Bot',
+    description: 'Push alerts for value bets',
+    keyEnv: 'TELEGRAM_TOKEN',
+    key: '',
+    tier: 'Free',
+    tierClass: 'badge-green',
+    quotaMax: null,
+    quotaUnit: 'No limit',
+    resetPeriod: 'N/A',
+    rateLimit: '30 msg/sec',
+    docs: 'https://core.telegram.org/bots/api',
+    endpoints: [
+      'POST /bot{token}/sendMessage',
+      'POST /bot{token}/sendPhoto',
+    ],
+    usedBy: ['src/notifications/telegram.py'],
+    liveCheck: false,
+    extra: { chatId: '6283479518' },
+  },
+];
+
+// ── Render ───────────────────────────────────────────────────────────────────
+function maskKey(k) {
+  if (!k) return '— no key required —';
+  if (k.length <= 10) return k;
+  return k.slice(0, 6) + '••••••••' + k.slice(-4);
+}
+
+function quotaColor(pct) {
+  if (pct >= 80) return 'red';
+  if (pct >= 50) return 'yellow';
+  return 'green';
+}
+
+function buildCard(api) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.dataset.id = api.id;
+
+  // quota section
+  let quotaHtml = '';
+  if (api.quotaMax && api.quotaUsed !== null) {
+    const used = api.quotaUsed;
+    const pct  = Math.round((used / api.quotaMax) * 100);
+    const col  = quotaColor(pct);
+    const remaining = api.quotaMax - used;
+    quotaHtml = `
+      <div class="quota-bar">
+        <div class="quota-label">
+          <span>Quota used</span>
+          <strong>${used} / ${api.quotaMax} ${api.quotaUnit} — <span style="color:${col==='red'?'#fc8181':col==='yellow'?'#ecc94b':'#48bb78'}">${remaining} remaining</span></strong>
+        </div>
+        <div class="bar-bg"><div class="bar-fill bar-${col}" style="width:${Math.min(pct,100)}%"></div></div>
+      </div>`;
+  } else if (api.quotaMax) {
+    quotaHtml = `
+      <div class="quota-bar">
+        <div class="quota-label"><span>Quota</span><strong id="${api.id}-quota-lbl">Checking…</strong></div>
+        <div class="bar-bg"><div class="bar-fill bar-green" id="${api.id}-bar" style="width:0%"></div></div>
+      </div>`;
+  }
+
+  // key section
+  let keyHtml = '';
+  if (api.key) {
+    keyHtml = `
+      <div class="key-row">
+        <label>Key</label>
+        <div class="key-display" id="key-${api.id}" title="Click to reveal/hide" onclick="toggleKey('${api.id}','${api.key}')">${maskKey(api.key)}</div>
+        <button class="copy-btn" id="copy-${api.id}" onclick="copyKey('${api.id}','${api.key}')">Copy</button>
+      </div>`;
+    if (api.id === 'telegram' && api.extra) {
+      keyHtml += `
+      <div class="key-row">
+        <label>Chat</label>
+        <div class="key-display" style="color:#a0aec0">${api.extra.chatId}</div>
+      </div>`;
+    }
+  }
+
+  const usedByHtml = api.usedBy.map(f => `<span class="meta-chip">${f.split('/').pop()}</span>`).join('');
+
+  card.innerHTML = `
+    <div class="card-header">
+      <div class="card-title">
+        <span class="icon">${api.icon}</span>
+        <div>
+          <h2>${api.name}</h2>
+          <p>${api.description}</p>
+        </div>
+      </div>
+      <span class="badge ${api.tierClass}">${api.tier}</span>
+    </div>
+    <div class="card-body">
+      ${quotaHtml}
+      <div class="meta-row">
+        <span class="meta-chip">⏱ ${api.rateLimit}</span>
+        <span class="meta-chip">🔄 ${api.resetPeriod}</span>
+        ${usedByHtml}
+      </div>
+      ${keyHtml}
+      <div class="actions">
+        <a href="${api.docs}" target="_blank"><button class="btn btn-secondary">📖 Docs</button></a>
+        ${api.id === 'odds' ? '<button class="btn btn-primary" onclick="checkOddsQuota()">🔄 Check Quota</button>' : ''}
+      </div>
+    </div>`;
+
+  return card;
+}
+
+function renderAll() {
+  ['live','free','notif'].forEach(group => {
+    const gridId = group === 'live' ? 'live-grid' : group === 'free' ? 'free-grid' : 'notif-grid';
+    const grid = document.getElementById(gridId);
+    grid.innerHTML = '';
+    APIs.filter(a => a.group === group).forEach(api => grid.appendChild(buildCard(api)));
+  });
+}
+
+// ── Live Odds API quota check ─────────────────────────────────────────────────
+async function checkOddsQuota() {
+  const api = APIs.find(item => item.id === 'odds');
+  const key = ((api && api.key) || '').trim();
+  if (!key) {
+    console.warn('ODDS_API_KEY is not configured in api_manager.html. Use the webapp API key manager or local .env instead.');
+    return;
+  }
+  try {
+    const r = await fetch(`https://api.the-odds-api.com/v4/sports?apiKey=${key}`);
+    const remaining = parseInt(r.headers.get('x-requests-remaining') || '0');
+    const used = parseInt(r.headers.get('x-requests-used') || '0');
+    updateOddsQuota(used, remaining);
+  } catch(e) {
+    console.warn('Quota check failed:', e);
+  }
+}
+
+function updateOddsQuota(used, remaining) {
+  const total = used + remaining;
+  const pct = Math.round((used / total) * 100);
+  const col = quotaColor(pct);
+
+  const lbl = document.getElementById('odds-quota-lbl');
+  const bar = document.getElementById('odds-bar');
+  if (lbl) lbl.textContent = `${used} / ${total} req/month — ${remaining} remaining`;
+  if (bar) { bar.className = `bar-fill bar-${col}`; bar.style.width = `${Math.min(pct,100)}%`; }
+
+  // Update summary bar
+  document.getElementById('odds-remaining').textContent = remaining;
+  document.getElementById('odds-pct').textContent = pct + '%';
+
+  // Replace the quota bar HTML properly
+  const quotaLbl = document.getElementById('odds-quota-lbl');
+  if (quotaLbl) {
+    quotaLbl.innerHTML = `${used} / ${total} — <span style="color:${col==='red'?'#fc8181':col==='yellow'?'#ecc94b':'#48bb78'}">${remaining} remaining</span>`;
+  }
+
+  // Update warning count
+  const warnEl = document.getElementById('warn-count');
+  if (remaining < 100) {
+    warnEl.textContent = '1';
+  } else {
+    warnEl.textContent = '0';
+  }
+}
+
+// ── Copy / Toggle key ─────────────────────────────────────────────────────────
+const _revealed = {};
+function toggleKey(id, full) {
+  const el = document.getElementById('key-' + id);
+  if (!el) return;
+  _revealed[id] = !_revealed[id];
+  el.textContent = _revealed[id] ? full : maskKey(full);
+}
+
+function copyKey(id, val) {
+  navigator.clipboard.writeText(val).then(() => {
+    const btn = document.getElementById('copy-' + id);
+    if (btn) { btn.textContent = '✓ Copied'; btn.classList.add('copied'); setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1800); }
+    showToast('Key copied to clipboard');
+  });
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+// ── Summary stats ─────────────────────────────────────────────────────────────
+function updateSummary() {
+  document.getElementById('active-count').textContent = APIs.filter(a => a.key || !a.keyEnv).length;
+  document.getElementById('warn-count').textContent = '—';
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+renderAll();
+updateSummary();
+document.getElementById('last-refresh').textContent = 'Last refresh: ' + new Date().toLocaleTimeString();
+
+// Auto-check odds quota on load
+checkOddsQuota();
+
+// Refresh timestamp every minute
+setInterval(() => {
+  document.getElementById('last-refresh').textContent = 'Last refresh: ' + new Date().toLocaleTimeString();
+}, 60000);
+</script>
+</body>
+</html>

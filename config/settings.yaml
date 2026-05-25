@@ -1,0 +1,478 @@
+# ============================================================
+# Sports Predictor - Master Configuration
+# ============================================================
+
+# ----------------------------------------------------------
+# Project paths (relative to project root)
+# ----------------------------------------------------------
+paths:
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  models: "data/models"
+  cache: "data/cache"
+
+# ----------------------------------------------------------
+# API Configuration
+# ----------------------------------------------------------
+apis:
+  football_data:
+    base_url: "https://api.football-data.org/v4"
+    rate_limit_per_minute: 10
+    # Competitions to track (football-data.org codes)
+    competitions:
+      - "PL"    # Premier League
+      - "ELC"   # Championship
+      - "BL1"   # Bundesliga
+      - "SA"    # Serie A
+      - "PD"    # La Liga
+      - "FL1"   # Ligue 1
+      - "CL"    # UEFA Champions League
+      - "PPL"   # Primeira Liga
+      - "DED"   # Eredivisie
+      - "BSA"   # Campeonato Brasileiro Serie A
+
+  api_sports:
+    base_url: "https://v3.football.api-sports.io"
+    basketball_url: "https://v1.basketball.api-sports.io"
+    tennis_url: "https://v1.tennis.api-sports.io"
+    rate_limit_per_day: 100
+
+  odds_api:
+    base_url: "https://api.the-odds-api.com/v4"
+    regions:
+      - "eu"
+      - "uk"
+    markets:
+      - "h2h"         # moneyline / 1X2
+      - "spreads"      # handicap
+      - "totals"       # over/under
+    rate_limit_per_month: 500
+
+# ----------------------------------------------------------
+# Sport-Specific Settings
+# ----------------------------------------------------------
+sports:
+  soccer:
+    enabled: true
+    seasons_to_fetch: 2          # free tier: only current + previous season
+    elo_k_factor: 32
+    elo_home_advantage: 65
+    elo_initial: 1500
+    form_window: 5               # last N matches for form calc
+    h2h_lookback_years: 3
+    target_variable: "result"    # home_win / draw / away_win
+    api_sports_competitions:
+      - key: "soccer_japan_j_league"
+        league_id: 98
+        name: "J-League"
+        country: "Japan"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_japan_j2_league"
+        league_id: 99
+        name: "J2 League"
+        country: "Japan"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_saudi_arabia_pro_league"
+        league_id: 307
+        name: "Pro League"
+        country: "Saudi-Arabia"
+        season_mode: "start_year"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_saudi_arabia_division_1"
+        league_id: 308
+        name: "Division 1"
+        country: "Saudi-Arabia"
+        season_mode: "start_year"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_conmebol_copa_libertadores"
+        league_id: 13
+        name: "CONMEBOL Libertadores"
+        country: "World"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_argentina_primera_division"
+        league_id: 128
+        name: "Liga Profesional Argentina"
+        country: "Argentina"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_chile_primera_division"
+        league_id: 265
+        name: "Primera División"
+        country: "Chile"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_colombia_primera_a"
+        league_id: 239
+        name: "Primera A"
+        country: "Colombia"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_ecuador_liga_pro"
+        league_id: 242
+        name: "Liga Pro"
+        country: "Ecuador"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_peru_primera_division"
+        league_id: 281
+        name: "Primera División"
+        country: "Peru"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_uruguay_primera_apertura"
+        league_id: 268
+        name: "Primera División - Apertura"
+        country: "Uruguay"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_uruguay_primera_clausura"
+        league_id: 270
+        name: "Primera División - Clausura"
+        country: "Uruguay"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_paraguay_primera_apertura"
+        league_id: 250
+        name: "Division Profesional - Apertura"
+        country: "Paraguay"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_paraguay_primera_clausura"
+        league_id: 252
+        name: "Division Profesional - Clausura"
+        country: "Paraguay"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_venezuela_primera_division"
+        league_id: 299
+        name: "Primera División"
+        country: "Venezuela"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+      - key: "soccer_bolivia_primera_division"
+        league_id: 344
+        name: "Primera División"
+        country: "Bolivia"
+        season_mode: "calendar"
+        season_years: [2024, 2023, 2022]
+
+  basketball:
+    enabled: true
+    seasons_to_fetch: 3
+    form_window: 10
+    pace_window: 10              # games to calculate pace over
+    target_variable: "result"    # home_win / away_win (no draw)
+    leagues:
+      - 12   # NBA (API-Sports league ID)
+
+  tennis:
+    enabled: true
+    seasons_to_fetch: 2
+    tours:
+      - "atp"
+      - "wta"
+    form_window: 10
+    surface_types:
+      - "Hard"
+      - "Clay"
+      - "Grass"
+    target_variable: "result"    # player1_win / player2_win
+
+# ----------------------------------------------------------
+# Feature Engineering
+# ----------------------------------------------------------
+features:
+  # Columns to drop before training (sport-agnostic)
+  # IMPORTANT: drop all raw outcome columns to prevent data leakage.
+  # Only pre-match features (rolling averages, ELO, form) should remain.
+  drop_columns:
+    - "match_id"
+    - "date"
+    - "home_team"
+    - "away_team"
+    - "season"
+    - "matchday"
+    - "home_team_id"
+    - "away_team_id"
+    - "competition"
+    # Soccer outcome columns (only known AFTER the match)
+    - "home_goals"
+    - "away_goals"
+    - "total_goals"
+    - "home_ht"
+    - "away_ht"
+    # Basketball outcome columns
+    - "home_score"
+    - "away_score"
+    - "total_points"
+    - "home_q1"
+    - "home_q2"
+    - "home_q3"
+    - "home_q4"
+    - "home_ot"
+    - "away_q1"
+    - "away_q2"
+    - "away_q3"
+    - "away_q4"
+    - "away_ot"
+    - "home_first_half"
+    - "home_second_half"
+    - "away_first_half"
+    - "away_second_half"
+    - "point_diff"
+    - "went_to_ot"
+    # Tennis outcome columns
+    - "player1_sets"
+    - "player2_sets"
+    - "total_sets"
+    - "p1_set_ratio"
+    - "set_scores"
+    - "status"
+
+  # Categorical encoding strategy
+  encoding: "target"  # "target" | "onehot" | "label"
+
+# ----------------------------------------------------------
+# Model Training
+# ----------------------------------------------------------
+model:
+  # Models to train and stack
+  algorithms:
+    - name: "xgboost"
+      params:
+        n_estimators: 500
+        max_depth: 6
+        learning_rate: 0.05
+        subsample: 0.8
+        colsample_bytree: 0.8
+        min_child_weight: 3
+        reg_alpha: 0.1
+        reg_lambda: 1.0
+        eval_metric: "mlogloss"
+        early_stopping_rounds: 50
+        use_label_encoder: false
+
+    - name: "lightgbm"
+      params:
+        n_estimators: 500
+        max_depth: 7
+        learning_rate: 0.05
+        subsample: 0.8
+        colsample_bytree: 0.8
+        min_child_weight: 3
+        reg_alpha: 0.1
+        reg_lambda: 1.0
+        num_leaves: 63
+        verbose: -1
+
+    - name: "random_forest"
+      params:
+        n_estimators: 300
+        max_depth: 10
+        min_samples_split: 5
+        min_samples_leaf: 3
+        max_features: "sqrt"
+
+  # Cross-validation
+  cv:
+    strategy: "time_series"  # walk-forward split
+    n_splits: 5
+    test_size_ratio: 0.2     # 20% test window
+
+  # Calibration
+  calibration:
+    method: "isotonic"  # "isotonic" | "platt" | "beta"
+    cv_folds: 3
+
+  # Stacking / ensembling
+  ensemble:
+    method: "soft_voting"  # "soft_voting" | "stacking"
+    weights: null            # null = equal weights; or [0.4, 0.4, 0.2]
+
+# ----------------------------------------------------------
+# Risk Management & Bankroll
+# ----------------------------------------------------------
+risk:
+  kelly:
+    fraction: 0.25           # quarter-Kelly (conservative)
+    max_bet_pct: 0.05        # never bet more than 5% of bankroll
+    min_edge: 0.03           # minimum 3% edge to place bet
+
+  bankroll:
+    initial: 1000.0
+    drawdown_limit: 0.20     # pause at 20% drawdown
+    daily_loss_limit: 0.05   # stop after 5% daily loss
+    max_concurrent_bets: 10
+
+# ----------------------------------------------------------
+# Betting Runtime Rules
+# ----------------------------------------------------------
+betting:
+  parlay:
+    conservative_min_legs: 3
+    conservative_max_legs: 5
+    conservative_min_leg_prob: 0.54
+    conservative_min_average_prob: 0.57
+    medium_risk_min_leg_prob: 0.50
+    speculative_min_leg_prob: 0.46
+  post_result:
+    negative_clv_error_threshold: -0.03
+    overconfidence_prob_threshold: 0.65
+    overconfidence_edge_threshold: 0.12
+    favourite_trap_max_odds: 1.75
+    underdog_resistance_min_odds: 2.35
+  adjustments:
+    soccer:
+      relegation_motivation_boost: 0.006
+      opponent_relegation_penalty: -0.006
+      title_motivation_boost: 0.005
+      opponent_title_penalty: -0.005
+      nothing_to_play_for_penalty: -0.006
+      rotation_uncertainty_penalty: -0.008
+      late_lineup_risk_penalty: -0.006
+      congestion_major_penalty: 0.014
+      congestion_minor_penalty: 0.008
+
+# ----------------------------------------------------------
+# 3-Mind Committee Runtime
+# ----------------------------------------------------------
+committee:
+  enable_committee_decision_layer: true
+  show_committee_details: false
+  allow_bet_substitutes: false
+  committee_required_for_parlays: true
+  max_conservative_parlay_legs: 5
+  block_stale_data: true
+  block_missing_lineups_near_kickoff: true
+  research_min_sources_for_high: 2
+  research_min_concrete_score_for_high: 75
+
+# ----------------------------------------------------------
+# Focused Prediction Lanes
+# ----------------------------------------------------------
+prediction_lanes:
+  mlb:
+    moneyline:
+      status: primary
+      label: Primary Focus
+      focus_allowed: true
+      parlay_allowed: false
+      quality_floor: 82
+      reason: "Primary lane: MLB moneyline has the cleanest current signal and structured pre-game inputs."
+      requires:
+        - probable_pitchers
+        - pitcher_change_check
+        - bullpen_workload
+        - weather
+        - park_factor
+        - lineups_or_projected_lineups
+        - travel_rest
+  tennis:
+    moneyline:
+      status: secondary
+      label: Secondary Focus
+      focus_allowed: true
+      parlay_allowed: false
+      quality_floor: 80
+      reason: "Secondary lane: ATP tennis moneyline is a clean 1v1 market with surface/form/fatigue inputs."
+      trusted_tours:
+        - atp
+      requires:
+        - surface
+        - recent_form
+        - ranking_or_elo
+        - fatigue
+        - injury_retirement_check
+        - tournament_context
+  soccer:
+    moneyline:
+      status: controlled
+      label: Controlled Focus
+      focus_allowed: true
+      parlay_allowed: false
+      quality_floor: 86
+      reason: "Controlled soccer wins lane: result bets require strong team-news, motivation, and rotation context."
+      requires:
+        - fixture_verified
+        - fresh_odds
+        - team_news
+        - motivation
+        - rotation_or_congestion
+        - home_away_form
+    totals:
+      status: controlled
+      label: Controlled Focus
+      focus_allowed: true
+      parlay_allowed: false
+      quality_floor: 84
+      reason: "Controlled soccer goals lane: totals require fresh lines, goal profile, and lineup/rotation context."
+      requires:
+        - fixture_verified
+        - fresh_odds
+        - goal_profile
+        - team_news
+        - rotation_or_congestion
+        - home_away_form
+    team_total:
+      status: controlled
+      label: Controlled Focus
+      focus_allowed: true
+      parlay_allowed: false
+      quality_floor: 86
+      reason: "Controlled soccer goals lane: team totals require team-specific attack/defense and lineup context."
+      requires:
+        - fixture_verified
+        - fresh_odds
+        - team_goal_profile
+        - team_news
+        - rotation_or_congestion
+        - home_away_form
+    double_chance:
+      status: controlled
+      label: Controlled Focus
+      focus_allowed: true
+      parlay_allowed: false
+      quality_floor: 82
+      reason: "Controlled soccer safety lane: double chance is allowed when draw risk and team context are handled."
+      requires:
+        - fixture_verified
+        - fresh_odds
+        - team_news
+        - motivation
+        - rotation_or_congestion
+        - home_away_form
+    draw_no_bet:
+      status: controlled
+      label: Controlled Focus
+      focus_allowed: true
+      parlay_allowed: false
+      quality_floor: 82
+      reason: "Controlled soccer safety lane: DNB is allowed when win case is plausible and draw risk is material."
+      requires:
+        - fixture_verified
+        - fresh_odds
+        - team_news
+        - motivation
+        - rotation_or_congestion
+        - home_away_form
+
+# ----------------------------------------------------------
+# Backtesting
+# ----------------------------------------------------------
+backtest:
+  walk_forward_window: 90    # retrain every 90 days
+  min_training_samples: 200
+  commission_pct: 0.0        # set > 0 if exchange charges
+  slippage_pct: 0.01         # 1% odds slippage simulation
+
+# ----------------------------------------------------------
+# Logging
+# ----------------------------------------------------------
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(name)-25s | %(levelname)-7s | %(message)s"
+  file: "logs/sports_predictor.log"
+  rotation: "10 MB"

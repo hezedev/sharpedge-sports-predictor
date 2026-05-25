@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SharpEdge — AI Sports Predictor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link rel="stylesheet" href="/static/style.css?v={{ style_css_v }}"/>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ═══════════ SIDEBAR ═══════════ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">Sharp<span>Edge</span></div>
+      <div class="logo-sub">AI Sports Predictor</div>
+    </div>
+    <nav class="nav">
+      <div class="nav-section">Overview</div>
+      <button class="nav-item active" onclick="showPage('dashboard')">
+        <span class="icon">🏠</span> Dashboard
+      </button>
+      <div class="nav-section">Betting</div>
+      <button class="nav-item" onclick="showPage('picks')">
+        <span class="icon">🎯</span> Picks Board
+      </button>
+      <button class="nav-item" onclick="showPage('parlays')">
+        <span class="icon">🔗</span> Parlays
+      </button>
+      <a class="nav-item" href="/live" style="text-decoration:none;display:flex;align-items:center;gap:8px;">
+        <span class="icon">🔴</span> Live Edges
+      </a>
+      <div class="nav-section">Analysis</div>
+      <button class="nav-item" onclick="showPage('performance')">
+        <span class="icon">📈</span> Performance
+      </button>
+      <button class="nav-item" onclick="showPage('results')">
+        <span class="icon">📊</span> Results
+      </button>
+      <button class="nav-item" onclick="showPage('reasoning')">
+        <span class="icon">🧠</span> Reasoning
+      </button>
+      <div class="nav-section">Tools</div>
+      <button class="nav-item" onclick="showPage('scan')">
+        <span class="icon">⚡</span> Run Scan
+      </button>
+      <button class="nav-item" onclick="showPage('apis')">
+        <span class="icon">🔌</span> API Manager
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <div style="font-size:.72rem;color:var(--text3)">SharpEdge v2</div>
+    </div>
+  </aside>
+
+  <!-- Mobile overlay -->
+  <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+  <!-- ═══════════ MAIN ═══════════ -->
+  <div class="main">
+
+    <!-- TOP BAR -->
+    <div class="topbar">
+      <button class="topbar-menu-btn" onclick="toggleSidebar()">☰</button>
+      <div class="topbar-title" id="page-title">Dashboard</div>
+      <div class="topbar-right">
+        <div class="stat-pill"><span class="dot" id="hdr-dot"></span> <span class="val" id="hdr-bankroll">£—</span></div>
+        <div class="stat-pill">🎯 <span class="val" id="hdr-bets">—</span></div>
+        <div class="stat-pill quota-pill" id="quota-topbar-pill">
+          <span id="quota-topbar-icon">📡</span>
+          <span id="quota-topbar-text">—/500</span>
+        </div>
+        <div class="stat-pill hdr-time-pill">🕒 <span class="val" id="hdr-time">—</span></div>
+      </div>
+    </div>
+
+    <!-- CONTENT -->
+    <div class="content">
+
+      <!-- ══ PAGE: DASHBOARD ══ -->
+      <div class="page active" id="page-dashboard">
+        <div class="grid4" style="margin-bottom:20px" id="db-kpi-row">
+          <div class="stat-card blue">
+            <div class="stat-label">Bankroll</div>
+            <div class="stat-value" id="db-bankroll">£—</div>
+            <div class="stat-sub">Working balance</div>
+          </div>
+          <div class="stat-card" id="db-pnl-card">
+            <div class="stat-label">All-time P&L</div>
+            <div class="stat-value" id="db-pnl">—</div>
+            <div class="stat-sub" id="db-roi-sub">ROI —</div>
+          </div>
+          <div class="stat-card green">
+            <div class="stat-label">Picks Today</div>
+            <div class="stat-value" id="db-picks-today">—</div>
+            <div class="stat-sub" id="db-games-scanned">— games scanned</div>
+          </div>
+          <div class="stat-card" id="db-quota-card">
+            <div class="stat-label">Odds API Quota</div>
+            <div class="stat-value" id="db-quota">—</div>
+            <div class="stat-sub">Remaining this month</div>
+          </div>
+        </div>
+
+        <div class="grid2" style="margin-bottom:20px">
+          <div class="panel">
+            <div class="panel-header">⚙️ Model Status</div>
+            <div class="panel-body" id="db-model-status">
+              <div style="color:var(--text3);font-size:.85rem">Loading…</div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">🖥️ System Status
+              <div class="ph-right">
+                <span id="db-last-scan" style="font-size:.75rem;color:var(--text3)">Last scan: —</span>
+              </div>
+            </div>
+            <div class="panel-body" id="db-system-status">
+              <div style="color:var(--text3);font-size:.85rem">Loading…</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:20px">
+          <div class="panel-header">🎯 Picks by Sport
+            <div class="ph-right">
+              <button onclick="showPage('picks')" class="panel-link-btn">View All →</button>
+            </div>
+          </div>
+          <div class="panel-body" id="db-picks-by-sport">
+            <div style="color:var(--text3);font-size:.85rem">Loading…</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">📈 Recent P&L (14 days)
+            <div class="ph-right">
+              <button onclick="showPage('performance')" class="panel-link-btn">Full Chart →</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <canvas id="db-pnl-chart" height="110"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PAGE: PICKS ══ -->
+      <div class="page" id="page-picks">
+
+        <div class="policy-strip" id="policy-strip">
+          <div class="policy-card">
+            <div class="policy-card-head">
+              <div class="policy-card-title">Preferred Markets</div>
+              <div class="policy-card-count">—</div>
+            </div>
+            <div class="policy-list"><div class="policy-item-copy">Loading market policy…</div></div>
+          </div>
+        </div>
+
+        <div class="filters" id="picks-filters">
+          <div class="filter-group">
+            <span class="filter-label">Sport</span>
+            <button class="chip active" data-filter="sport" data-val="all" onclick="toggleFilter(this)">All</button>
+            <button class="chip" data-filter="sport" data-val="soccer" onclick="toggleFilter(this)">⚽ Soccer</button>
+            <button class="chip" data-filter="sport" data-val="basketball" onclick="toggleFilter(this)">🏀 NBA</button>
+            <button class="chip" data-filter="sport" data-val="mlb" onclick="toggleFilter(this)">⚾ MLB</button>
+            <button class="chip" data-filter="sport" data-val="nhl" onclick="toggleFilter(this)">🏒 NHL</button>
+            <button class="chip" data-filter="sport" data-val="tennis" onclick="toggleFilter(this)">🎾 ATP</button>
+            <button class="chip" data-filter="sport" data-val="tennis_wta" onclick="toggleFilter(this)">🎾 WTA</button>
+          </div>
+          <div class="chip-divider"></div>
+          <div class="filter-group">
+            <span class="filter-label">Market</span>
+            <button class="chip active" data-filter="market" data-val="all" onclick="toggleFilter(this)">All</button>
+            <button class="chip" data-filter="market" data-val="moneyline" onclick="toggleFilter(this)">Moneyline</button>
+            <button class="chip" data-filter="market" data-val="totals" onclick="toggleFilter(this)">Totals</button>
+            <button class="chip" data-filter="market" data-val="spreads" onclick="toggleFilter(this)">Spreads</button>
+          </div>
+          <div class="chip-divider"></div>
+          <div class="filter-group">
+            <span class="filter-label">Tier</span>
+            <button class="chip active" data-filter="policy" data-val="all" onclick="toggleFilter(this)">All Active</button>
+            <button class="chip" data-filter="policy" data-val="preferred" onclick="toggleFilter(this)">Preferred</button>
+            <button class="chip" data-filter="policy" data-val="experimental" onclick="toggleFilter(this)">Experimental</button>
+          </div>
+          <div class="chip-divider"></div>
+          <div class="filter-group">
+            <span class="filter-label">Window</span>
+            <button class="chip active" data-filter="window" data-val="all" onclick="toggleFilter(this)">All</button>
+            <button class="chip" data-filter="window" data-val="today" onclick="toggleFilter(this)">Today</button>
+            <button class="chip" data-filter="window" data-val="tomorrow" onclick="toggleFilter(this)">Tomorrow</button>
+          </div>
+          <div class="chip-divider"></div>
+          <div class="filter-group">
+            <span class="filter-label">Date</span>
+            <input id="picks-date" type="date" onchange="changePicksDate(this.value)" style="background:rgba(148,163,184,.08);border:1px solid var(--border);color:var(--text);border-radius:999px;padding:8px 12px;font:inherit;font-size:.82rem" />
+            <button class="chip" onclick="clearPicksDate()">Clear</button>
+          </div>
+          <div class="chip-divider"></div>
+          <div class="filter-group">
+            <span class="filter-label">Context</span>
+            <button class="chip active" data-filter="context" data-val="all" onclick="toggleFilter(this)">All</button>
+            <button class="chip" data-filter="context" data-val="lineup_confirmation" onclick="toggleFilter(this)">⚽ XI</button>
+            <button class="chip" data-filter="context" data-val="starter_confirmation" onclick="toggleFilter(this)">⚾ Starter</button>
+            <button class="chip" data-filter="context" data-val="goalie_quality" onclick="toggleFilter(this)">🥅 Goalie</button>
+            <button class="chip" data-filter="context" data-val="rotation_quality_edge" onclick="toggleFilter(this)">🏀 Rotation</button>
+          </div>
+          <div class="chip-divider"></div>
+          <div class="filter-group">
+            <span class="filter-label">Sort</span>
+            <select id="picks-sort" onchange="changePicksSort(this.value)" style="background:rgba(148,163,184,.08);border:1px solid var(--border);color:var(--text);border-radius:999px;padding:8px 12px;font:inherit;font-size:.82rem">
+              <option value="confidence">Model % ↓</option>
+              <option value="edge">Edge % ↓</option>
+              <option value="evidence">Concrete evidence ↓</option>
+              <option value="kickoff">Soonest start</option>
+              <option value="context">Most context</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="picks-summary">
+          <div class="picks-summary-copy">
+            <div class="picks-summary-eyebrow" id="picks-summary-eyebrow">Picks Focus</div>
+            <div class="picks-summary-title" id="picks-summary-title">Production picks only. Review-only leagues stay visible, but off the live board.</div>
+          </div>
+          <div class="picks-summary-stats">
+            <div class="summary-pill">
+              <div class="summary-pill-label">Value Bets</div>
+              <div class="summary-pill-value" id="bets-count-pill">—</div>
+            </div>
+            <div class="summary-pill">
+              <div class="summary-pill-label">Scanned Games</div>
+              <div class="summary-pill-value" id="games-count-pill">—</div>
+            </div>
+            <div class="summary-pill">
+              <div class="summary-pill-label">Window</div>
+              <div class="summary-pill-value" id="picks-window-label">All windows</div>
+            </div>
+            <div class="summary-pill">
+              <div class="summary-pill-label">Tier</div>
+              <div class="summary-pill-value" id="picks-tier-label">All active</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="launch-support-strip">
+          <div class="launch-support-item">
+            <span class="launch-support-tag production">Production</span>
+            Supported sports now run as live production lanes inside their current model-backed scope.
+          </div>
+          <div class="launch-support-item">
+            <span class="launch-support-tag limited">Limited</span>
+            Soccer will often show the largest slate because it spans many leagues, while NBA, MLB, NHL, ATP, and WTA each map to fewer competitions.
+          </div>
+          <div class="launch-support-item">
+            <span class="launch-support-tag review">Review</span>
+            Held candidates stay visible when evidence, freshness, or market-fit gates are not strong enough to publish.
+          </div>
+        </div>
+
+        <div id="scan-notes-banner" class="review-info-banner" style="display:none;margin-top:14px;margin-bottom:4px"></div>
+
+        <div id="value-bets-section">
+          <div class="section-head">
+            <div>
+              <div class="section-head-title">Value Bets</div>
+              <div class="section-head-copy">Singles that passed all guardrails and market-policy rules.</div>
+            </div>
+            <span class="section-count" id="bets-count">—</span>
+          </div>
+          <div class="bets-grid" id="bets-list">
+            <div class="empty-state"><div class="big-icon">🎯</div><p>Loading picks…</p></div>
+          </div>
+        </div>
+
+        <div id="review-bets-section">
+          <div class="section-head">
+            <div>
+              <div class="section-head-title">Manual Review</div>
+              <div class="section-head-copy">Visible candidates the launch rules held back for review-only league status, stale pricing, or availability risk.</div>
+            </div>
+            <span class="section-count" id="review-bets-count">—</span>
+          </div>
+          <div class="review-info-banner">
+            <div class="review-info-item">
+              <span class="review-info-tag stale">Price freshness</span>
+              Odds were pulled from cache, not live market. The price shown may have moved. Fix: run a fresh scan without "Saved Odds" mode.
+            </div>
+            <div class="review-info-item">
+              <span class="review-info-tag avail">Availability risk</span>
+              Lineup/injury uncertainty detected — starter confirmation is missing. Fix: enable "Context Referee" chip before scanning so the model checks confirmed lineups.
+            </div>
+            <div class="review-info-item">
+              <span class="review-info-tag promote">Auto-promote rule</span>
+              A held bet moves to Value Bets automatically when it's in a Preferred market with at least 1 positive context signal, OR has 2+ context signals regardless of market tier — and no availability flag.
+            </div>
+          </div>
+          <div class="bets-grid" id="review-bets-list">
+            <div class="empty-state"><div class="big-icon">🧠</div><p>Loading review queue…</p></div>
+          </div>
+        </div>
+
+        <div id="all-games-section" class="fold-panel">
+          <button class="fold-toggle" onclick="toggleFoldPanel('all-games-section')">
+            <div class="fold-toggle-main">
+              <div class="fold-toggle-title">Scanned Game Slate</div>
+              <div class="fold-toggle-copy">Full slate grouped by day.</div>
+            </div>
+            <div class="fold-toggle-meta">
+              <span class="section-count" id="games-count">—</span>
+              <span class="fold-chevron">▶</span>
+            </div>
+          </button>
+          <div class="fold-body">
+            <div id="all-games-list"><div style="color:var(--text3);font-size:.8rem;padding:8px">Loading…</div></div>
+          </div>
+        </div>
+
+        <div id="soccer-games-section" class="fold-panel" style="display:none">
+          <button class="fold-toggle" onclick="toggleFoldPanel('soccer-games-section')">
+            <div class="fold-toggle-main">
+              <div class="fold-toggle-title">Soccer Market Browser</div>
+              <div class="fold-toggle-copy">Full outcome tree for soccer matches.</div>
+            </div>
+            <div class="fold-toggle-meta">
+              <span class="section-count" id="soccer-games-count">—</span>
+              <span class="fold-chevron">▶</span>
+            </div>
+          </button>
+          <div class="fold-body">
+            <div id="soccer-games-list"></div>
+          </div>
+        </div>
+      </div><!-- /page-picks -->
+
+      <!-- ══ PAGE: PARLAYS ══ -->
+      <div class="page" id="page-parlays">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <div class="parlay-tabs" style="margin-bottom:0">
+            <button class="ptab active" onclick="switchParlayTab('value', this)">🎯 Value Book</button>
+            <button class="ptab" onclick="switchParlayTab('speculative', this)">⚡ Longshot Book</button>
+            <button class="ptab" onclick="switchParlayTab('custom', this)">✏️ Custom Builder</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button id="btn-ai-parlay" onclick="buildAiParlay()" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:none;border-radius:var(--r);padding:8px 18px;font-size:.85rem;cursor:pointer;display:flex;align-items:center;gap:6px;font-weight:600">
+              🤖 AI Parlay
+            </button>
+            <button id="btn-parlay-check" onclick="checkParlayResults()" style="background:var(--accent);color:#fff;border:none;border-radius:var(--r);padding:8px 18px;font-size:.85rem;cursor:pointer;display:flex;align-items:center;gap:6px">
+              <span>⚡</span> Check Results
+            </button>
+          </div>
+        </div>
+        <div id="parlay-settle-status" style="display:none;margin-bottom:12px;padding:10px 14px;border-radius:var(--r);font-size:.85rem"></div>
+        <div id="parlay-content">
+          <div class="empty-state"><div class="big-icon">🔗</div><p>Loading parlays…</p></div>
+        </div>
+      </div>
+
+      <!-- ══ PAGE: PERFORMANCE ══ -->
+      <div class="page" id="page-performance">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+          <div style="font-size:.78rem;color:var(--text3)">Showing results for:</div>
+          <div class="parlay-tabs" style="margin-bottom:0">
+            <button class="ptab active" id="perf-tab-mine" onclick="switchPerfScope('mine',this)">My Picks</button>
+            <button class="ptab" id="perf-tab-all" onclick="switchPerfScope('all',this)">All System</button>
+          </div>
+        </div>
+        <div class="grid4" style="margin-bottom:20px" id="perf-kpi-row">
+          <div class="stat-card blue">
+            <div class="stat-label">Total Bets</div>
+            <div class="stat-value" id="perf-total">—</div>
+            <div class="stat-sub" id="perf-won-sub">— won</div>
+          </div>
+          <div class="stat-card" id="perf-pnl-card">
+            <div class="stat-label">Total P&L</div>
+            <div class="stat-value" id="perf-pnl">—</div>
+            <div class="stat-sub">units</div>
+          </div>
+          <div class="stat-card" id="perf-roi-card">
+            <div class="stat-label">ROI</div>
+            <div class="stat-value" id="perf-roi">—</div>
+            <div class="stat-sub">return on stake</div>
+          </div>
+          <div class="stat-card" id="perf-clv-card">
+            <div class="stat-label">Avg CLV</div>
+            <div class="stat-value" id="perf-clv">—</div>
+            <div class="stat-sub">closing line value</div>
+          </div>
+        </div>
+
+        <div class="grid3" style="margin-bottom:20px" id="perf-eval-summary-row">
+          <div class="stat-card">
+            <div class="stat-label">All Bets</div>
+            <div class="stat-value" id="perf-eval-all">—</div>
+            <div class="stat-sub" id="perf-eval-all-sub">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Singles Only</div>
+            <div class="stat-value" id="perf-eval-singles">—</div>
+            <div class="stat-sub" id="perf-eval-singles-sub">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Recent 30 Singles</div>
+            <div class="stat-value" id="perf-eval-recent">—</div>
+            <div class="stat-sub" id="perf-eval-recent-sub">—</div>
+          </div>
+        </div>
+
+        <div class="grid2" style="margin-bottom:20px">
+          <div class="panel">
+            <div class="panel-header">📈 Cumulative P&L</div>
+            <div class="panel-body">
+              <div class="chart-wrap"><canvas id="perf-cumulative-chart"></canvas></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">📉 Drawdown</div>
+            <div class="panel-body">
+              <div class="chart-wrap"><canvas id="perf-drawdown-chart"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid2" style="margin-bottom:20px">
+          <div class="panel">
+            <div class="panel-header">🏆 ROI by Sport</div>
+            <div class="panel-body">
+              <div class="chart-wrap"><canvas id="perf-sport-chart"></canvas></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">🎯 Win Rate by Market</div>
+            <div class="panel-body">
+              <div class="chart-wrap"><canvas id="perf-market-chart"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid2" style="margin-bottom:20px">
+          <div class="panel">
+            <div class="panel-header">🧭 Lane Health</div>
+            <div class="panel-body">
+              <div id="perf-lane-highlights"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">🎲 Odds Bucket Health</div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>Odds Bucket</th><th>Bets</th><th>Win Rate</th><th>ROI</th><th>P&amp;L</th></tr></thead>
+                  <tbody id="perf-odds-bucket-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid2" style="margin-bottom:20px">
+          <div class="panel">
+            <div class="panel-header">🎯 Prediction Reliability</div>
+            <div class="panel-body">
+              <div id="perf-calibration-summary" style="margin-bottom:12px;color:var(--text2)"></div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>Sport</th><th>Bets</th><th>Avg Prob</th><th>Win Rate</th><th>Gap</th><th>Brier</th><th>Log Loss</th></tr></thead>
+                  <tbody id="perf-calibration-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">🪜 Confidence Buckets</div>
+            <div class="panel-body">
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>Bucket</th><th>Bets</th><th>Avg Prob</th><th>Win Rate</th><th>Gap</th></tr></thead>
+                  <tbody id="perf-calibration-buckets-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:20px">
+          <div class="panel-header">🧭 Calibration Governor</div>
+          <div class="panel-body">
+            <div id="perf-calibration-governor-summary" style="margin-bottom:12px;color:var(--text2)"></div>
+            <div id="perf-active-calibration-summary" style="margin-bottom:12px;color:var(--text2)"></div>
+            <div id="perf-calibration-governor-panel"></div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:20px">
+          <div class="panel-header">📊 Sport Breakdown</div>
+          <div class="panel-body">
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>Sport</th><th>Bets</th><th>Won</th><th>Win Rate</th><th>Stake</th><th>P&L</th><th>ROI</th><th>Avg CLV</th></tr></thead>
+                <tbody id="perf-sport-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">📅 Daily P&L (last 30 days)</div>
+          <div class="panel-body">
+            <div class="chart-wrap"><canvas id="perf-daily-chart" height="80"></canvas></div>
+          </div>
+        </div>
+      </div><!-- /page-performance -->
+
+      <!-- ══ PAGE: RESULTS ══ -->
+      <div class="page" id="page-results">
+
+        <!-- Top bar: tabs + actions -->
+        <div class="res-topbar">
+          <div class="parlay-tabs" style="margin-bottom:0">
+            <button class="ptab active" id="res-tab-my"  onclick="switchResultsTab('my',this)">🎯 Tracked Bets</button>
+            <button class="ptab"        id="res-tab-all" onclick="switchResultsTab('all',this)">📊 System Book</button>
+          </div>
+          <button onclick="confirmClearHistory()" class="res-clear-btn" title="Archive and clear all bet history">🗑 Clear History</button>
+        </div>
+
+        <!-- Tracked Bets view -->
+        <div id="res-view-my">
+          <div class="results-toolbar">
+            <div class="results-date-controls">
+              <div id="my-date-chips" class="results-date-quick">
+                <button class="chip active" onclick="selectMyDate(this,'all')">All Time</button>
+                <button class="chip" onclick="selectMyDate(this,'today')">Today</button>
+              </div>
+              <input id="my-date-select" class="results-date-select" type="date" onchange="selectMyDateSelect(this.value)" />
+              <button onclick="autoSettleAll(this)" class="res-action-btn green" id="btn-settle-all-open">✓ Check &amp; Settle</button>
+            </div>
+            <div id="settle-result-panel" style="display:none;margin-top:10px;padding:12px 16px;border-radius:var(--r);font-size:.82rem;line-height:1.6;border:1px solid var(--border)"></div>
+          </div>
+          <div class="launch-support-strip compact">
+            <div class="launch-support-item">
+              <span class="launch-support-tag production">Tracked Bets</span>
+              Your personal slips. Auto-settle checks event date first and leaves ambiguous matches pending.
+            </div>
+          </div>
+          <div class="results-card-grid" style="margin-bottom:16px">
+            <div class="stat-card blue"><div class="stat-label">My Bets</div><div class="stat-value" id="my-total">—</div></div>
+            <div class="stat-card" id="my-wr-card"><div class="stat-label">Win Rate</div><div class="stat-value" id="my-wr">—</div></div>
+            <div class="stat-card" id="my-pnl-card"><div class="stat-label">P&L</div><div class="stat-value" id="my-pnl">—</div><div class="stat-sub">units</div></div>
+            <div class="stat-card" id="my-roi-card"><div class="stat-label">ROI</div><div class="stat-value" id="my-roi">—</div></div>
+          </div>
+          <div class="results-panel" id="my-pending-panel" style="display:none">
+            <div class="panel-header">⏳ Pending
+              <div class="ph-right"><span id="my-pending-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>Sport</th><th>Pick</th><th>Match</th><th>Odds</th><th>Edge</th><th>Kick-off</th><th>Settle</th></tr></thead>
+                <tbody id="my-pending-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="results-panel">
+            <div class="panel-header">📋 Tracked Results
+              <div class="ph-right"><span id="my-settled-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div id="my-settled-groups"></div>
+          </div>
+        </div>
+
+        <!-- System Book view -->
+        <div id="res-view-all" style="display:none">
+          <div class="results-toolbar">
+            <div class="results-date-controls">
+              <div id="date-chips" class="results-date-quick">
+                <button class="chip active" data-date="all" onclick="selectResultDate(this,'all')">All Time</button>
+                <button class="chip" data-date="today" onclick="selectResultDate(this,'today')">Today</button>
+              </div>
+              <input id="result-date-select" class="results-date-select" type="date" onchange="selectResultDateSelect(this.value)" />
+            </div>
+          </div>
+          <div class="launch-support-strip compact">
+            <div class="launch-support-item">
+              <span class="launch-support-tag production">System Book</span>
+              Full production ledger. Review-only and unresolved items stay separated instead of being forced into settled output.
+            </div>
+          </div>
+
+          <!-- KPI grid: value bets + parlays side by side -->
+          <div class="results-segment-grid" style="margin-bottom:16px">
+            <div class="results-panel">
+              <div class="panel-body" style="padding-bottom:6px">
+                <div class="segment-kicker">Value Bets</div>
+              </div>
+              <div class="results-card-grid" id="results-stats" style="padding:0 14px 14px">
+                <div class="stat-card blue"><div class="stat-label">Bets</div><div class="stat-value" id="res-value-total">—</div></div>
+                <div class="stat-card" id="res-value-wr-card"><div class="stat-label">Win Rate</div><div class="stat-value" id="res-value-wr">—</div></div>
+                <div class="stat-card" id="res-value-pnl-card"><div class="stat-label">P&L</div><div class="stat-value" id="res-value-pnl">—</div></div>
+                <div class="stat-card" id="res-value-roi-card"><div class="stat-label">ROI</div><div class="stat-value" id="res-value-roi">—</div></div>
+              </div>
+            </div>
+            <div class="results-panel">
+              <div class="panel-body" style="padding-bottom:6px">
+                <div class="segment-kicker">Parlays</div>
+              </div>
+              <div class="results-card-grid" style="padding:0 14px 14px">
+                <div class="stat-card blue"><div class="stat-label">Parlays</div><div class="stat-value" id="res-parlay-total">—</div></div>
+                <div class="stat-card" id="res-parlay-wr-card"><div class="stat-label">Win Rate</div><div class="stat-value" id="res-parlay-wr">—</div></div>
+                <div class="stat-card" id="res-parlay-pnl-card"><div class="stat-label">P&L</div><div class="stat-value" id="res-parlay-pnl">—</div></div>
+                <div class="stat-card" id="res-parlay-roi-card"><div class="stat-label">ROI</div><div class="stat-value" id="res-parlay-roi">—</div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🏷️ Version Snapshot
+              <div class="ph-right"><span id="res-version-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" id="version-summary-panel">
+              <div style="color:var(--text3);font-size:.82rem">Loading model and policy version metadata…</div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🧰 Settlement Reliability
+              <div class="ph-right" style="display:flex;align-items:center;gap:10px">
+                <button onclick="sweepSettlementBacklog(this)" class="panel-link-btn" id="btn-backlog-sweep">Sweep Backlog</button>
+                <span id="res-settle-count" style="color:var(--text3);font-size:.78rem"></span>
+              </div>
+            </div>
+            <div class="panel-body" id="settlement-reliability-panel">
+              <div style="color:var(--text3);font-size:.82rem">Measuring settlement coverage and unresolved backlog…</div>
+            </div>
+          </div>
+
+          <div class="grid2" style="margin-bottom:16px">
+            <div class="results-panel">
+              <div class="panel-header">📈 Cumulative P&L</div>
+              <div class="panel-body"><div class="chart-wrap"><canvas id="pnl-chart"></canvas></div></div>
+            </div>
+            <div class="results-panel">
+              <div class="panel-header">🏆 ROI by Market</div>
+              <div class="panel-body"><div class="chart-wrap"><canvas id="market-chart"></canvas></div></div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">📊 Win Rate by Sport</div>
+            <div class="panel-body"><div class="sport-bars" id="sport-bars"></div></div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🧭 Performance Matrix
+              <div class="ph-right"><span id="res-matrix-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" style="padding-top:10px">
+              <div style="color:var(--text3);font-size:.8rem;margin-bottom:10px">
+                Sport × market × tier performance, ranked to show where the system is strongest and where it needs demotion or rebuild work.
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Sport</th>
+                      <th>Market</th>
+                      <th>Tier</th>
+                      <th>Bets</th>
+                      <th>Settled%</th>
+                      <th>Win Rate</th>
+                      <th>ROI</th>
+                      <th>P&amp;L</th>
+                      <th>Avg Edge</th>
+                      <th>Avg CLV</th>
+                      <th>CLV+ Rate</th>
+                      <th>Signal</th>
+                    </tr>
+                  </thead>
+                  <tbody id="performance-matrix-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🎰 Parlay Performance Matrix
+              <div class="ph-right"><span id="res-parlay-matrix-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" style="padding-top:10px">
+              <div style="color:var(--text3);font-size:.8rem;margin-bottom:10px">
+                System parlay performance by style, odds bracket, leg count, and sport mix. This is the evidence layer for whether value and longshot builds deserve to stay live.
+              </div>
+              <div class="results-card-grid" id="parlay-performance-cards" style="margin-bottom:14px"></div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Source</th>
+                      <th>Style</th>
+                      <th>Bracket</th>
+                      <th>Legs</th>
+                      <th>Mix</th>
+                      <th>Bets</th>
+                      <th>Win Rate</th>
+                      <th>ROI</th>
+                      <th>P&amp;L</th>
+                      <th>Avg Odds</th>
+                      <th>Avg Edge</th>
+                      <th>Avg EV</th>
+                    </tr>
+                  </thead>
+                  <tbody id="parlay-performance-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🎟️ Parlay Drilldown
+              <div class="ph-right"><span id="res-parlay-caption" style="color:var(--text3);font-size:.78rem">Select a parlay cohort above</span></div>
+            </div>
+            <div class="panel-body" id="parlay-drilldown-panel">
+              <div style="color:var(--text3);font-size:.82rem">
+                Click a row in `Parlay Performance Matrix` to inspect the settled parlays behind that cohort.
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🧪 Replay Support
+              <div class="ph-right"><span id="res-replay-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" style="padding-top:10px">
+              <div style="color:var(--text3);font-size:.8rem;margin-bottom:10px">
+                Historical backtest support by sport and market family, used to validate whether live promotion or demotion calls are directionally safe.
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Sport</th>
+                      <th>Market</th>
+                      <th>Support</th>
+                      <th>Rank</th>
+                      <th>Specs</th>
+                      <th>Games</th>
+                      <th>Accuracy</th>
+                      <th>Log Loss</th>
+                      <th>ECE</th>
+                    </tr>
+                  </thead>
+                  <tbody id="replay-support-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">📚 Replay Policy Audit
+              <div class="ph-right"><span id="res-replay-audit-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" style="padding-top:10px">
+              <div style="color:var(--text3);font-size:.8rem;margin-bottom:10px">
+                Current market policy compared against historical replay support, to show where a lane is aligned, under-promoted, or over-promoted.
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Sport</th>
+                      <th>Market</th>
+                      <th>Current</th>
+                      <th>Replay</th>
+                      <th>Recommended</th>
+                      <th>Alignment</th>
+                      <th>Rank</th>
+                      <th>Games</th>
+                    </tr>
+                  </thead>
+                  <tbody id="replay-policy-audit-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🎞️ Replay Portfolio Simulator
+              <div class="ph-right"><span id="res-replay-portfolio-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" style="padding-top:10px">
+              <div style="color:var(--text3);font-size:.8rem;margin-bottom:10px">
+                Current market policy applied to the replay corpus, to show what the live stack is effectively choosing to publish, constrain, or hold out.
+              </div>
+              <div class="results-card-grid" id="replay-scenario-cards" style="margin-bottom:14px"></div>
+              <div class="results-card-grid" id="replay-portfolio-cards" style="margin-bottom:14px"></div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Sport</th>
+                      <th>Market</th>
+                      <th>Bucket</th>
+                      <th>Policy</th>
+                      <th>Replay</th>
+                      <th>Games</th>
+                      <th>Accuracy</th>
+                      <th>Log Loss</th>
+                      <th>ECE</th>
+                    </tr>
+                  </thead>
+                  <tbody id="replay-portfolio-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🗓️ Replay Slates
+              <div class="ph-right"><span id="res-replay-slates-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" style="padding-top:10px">
+              <div style="color:var(--text3);font-size:.8rem;margin-bottom:10px">
+                Historical replay grouped by date using the current market-policy buckets, so you can see what the live stack would have published or held out across past slates.
+              </div>
+              <div class="results-card-grid" id="replay-slates-cards" style="margin-bottom:14px"></div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Events</th>
+                      <th>Published</th>
+                      <th>Held Out</th>
+                      <th>Preferred</th>
+                      <th>Limited</th>
+                      <th>Published Acc</th>
+                      <th>Log Loss</th>
+                      <th>Held Acc</th>
+                      <th>Top Lanes</th>
+                    </tr>
+                  </thead>
+                  <tbody id="replay-slates-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🎬 Replay Slate Detail
+              <div class="ph-right"><span id="res-replay-slate-caption" style="color:var(--text3);font-size:.78rem">Select a replay date above</span></div>
+            </div>
+            <div class="panel-body" id="replay-slate-detail-panel">
+              <div style="color:var(--text3);font-size:.82rem">
+                Click a row in `Replay Slates` to inspect the historical replay events behind that date and see what current policy would have published or held out.
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🧾 Replay Publish Audit
+              <div class="ph-right"><span id="res-replay-publish-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" style="padding-top:10px">
+              <div style="color:var(--text3);font-size:.8rem;margin-bottom:10px">
+                Event-level replay routing using the current market policy plus a confidence audit. This is the closest historical approximation of `publish`, `review`, and `hold out` in the live stack.
+              </div>
+              <div class="results-card-grid" id="replay-publish-cards" style="margin-bottom:14px"></div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Events</th>
+                      <th>Publish</th>
+                      <th>Review</th>
+                      <th>Hold Out</th>
+                      <th>Publish Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody id="replay-publish-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🛡️ Governor Recommendations
+              <div class="ph-right"><span id="res-governor-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" id="governor-recommendations">
+              <div style="color:var(--text3);font-size:.82rem">Loading lane recommendations…</div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🔎 Lane Drilldown
+              <div class="ph-right"><span id="res-lane-caption" style="color:var(--text3);font-size:.78rem">Select a lane from the tables above</span></div>
+            </div>
+            <div class="panel-body" id="lane-drilldown-panel">
+              <div style="color:var(--text3);font-size:.82rem">
+                Click a row in `Performance Matrix` or `Replay Support` to inspect the underlying settled bets, pending backlog, replay support, and governor rationale for that lane.
+              </div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">📝 Draft Policy Preview
+              <div class="ph-right"><span id="res-preview-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" id="governor-preview-panel">
+              <div style="color:var(--text3);font-size:.82rem">Building draft changes…</div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🔁 Retrain Triggers
+              <div class="ph-right"><span id="res-retrain-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" id="retrain-triggers-panel">
+              <div style="color:var(--text3);font-size:.82rem">Evaluating live drift signals…</div>
+            </div>
+          </div>
+
+          <div class="results-panel" style="margin-bottom:16px">
+            <div class="panel-header">🧱 Rebuild Candidates
+              <div class="ph-right"><span id="res-rebuild-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="panel-body" id="rebuild-candidates-panel">
+              <div style="color:var(--text3);font-size:.82rem">Converting weak lanes into concrete rebuild actions…</div>
+            </div>
+          </div>
+
+          <div class="results-panel" id="sys-parlays-panel" style="display:none">
+            <div class="panel-header">🤖 System Parlays
+              <div class="ph-right"><span id="res-sys-parlays-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div id="sys-parlays-list" style="padding:8px 0"></div>
+          </div>
+
+          <div class="results-panel" id="manual-parlays-panel" style="display:none">
+            <div class="panel-header">✍️ Saved Manual Parlays
+              <div class="ph-right"><span id="res-manual-parlays-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div id="manual-parlays-list" style="padding:8px 0"></div>
+          </div>
+
+          <div class="results-panel" id="pending-panel" style="display:none">
+            <div class="panel-header">⏳ Pending Bets
+              <div class="ph-right"><span id="res-pending-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>Sport</th><th>Pick</th><th>Match</th><th>Odds</th><th>Edge</th><th>Market</th><th>Stake</th><th>Settle</th></tr></thead>
+                <tbody id="pending-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="results-panel">
+            <div class="panel-header">📋 Settled Bets
+              <div class="ph-right"><span id="res-settled-count" style="color:var(--text3);font-size:.78rem"></span></div>
+            </div>
+            <div id="settled-groups"></div>
+          </div>
+        </div><!-- /res-view-all -->
+
+        <!-- Clear history confirmation modal -->
+        <div id="clear-history-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:none;align-items:center;justify-content:center">
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:420px;width:90%">
+            <div style="font-size:1.1rem;font-weight:700;margin-bottom:8px">Clear Bet History</div>
+            <div style="color:var(--text2);font-size:.88rem;margin-bottom:18px">This archives all predictions and settled bets. The data is saved to <code>data/tracker/archives/</code> and can be restored manually.<br><br>Type <strong>DELETE</strong> to confirm.</div>
+            <input id="clear-confirm-input" type="text" placeholder="Type DELETE to confirm" style="width:100%;padding:9px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);color:var(--text);font-size:.9rem;box-sizing:border-box;margin-bottom:14px"/>
+            <div style="display:flex;gap:10px;justify-content:flex-end">
+              <button onclick="closeClearModal()" style="padding:8px 18px;background:none;border:1px solid var(--border);color:var(--text2);border-radius:var(--r);cursor:pointer">Cancel</button>
+              <button onclick="executeClearHistory()" style="padding:8px 18px;background:#dc2626;border:none;color:#fff;border-radius:var(--r);cursor:pointer;font-weight:700">Clear History</button>
+            </div>
+          </div>
+        </div>
+      </div><!-- /page-results -->
+
+      <!-- ══ PAGE: REASONING ══ -->
+      <div class="page" id="page-reasoning">
+        <div class="workspace-hero">
+          <div>
+            <div class="workspace-hero-eyebrow">Reasoning Lane</div>
+            <div class="workspace-hero-title">Two-step reasoning for today's value bets: fast guarded review or slower full live verification.</div>
+            <div class="workspace-hero-copy">Only launch-safe value bets from today's board are eligible. The guarded scan re-checks the board candidate with live context, while full live verification rebuilds the analyst case from scratch before the referee weighs in.</div>
+          </div>
+          <div class="workspace-hero-stats">
+            <div class="workspace-mini"><div class="workspace-mini-label">Input</div><div class="workspace-mini-value">Value Bets Only</div></div>
+            <div class="workspace-mini"><div class="workspace-mini-label">Output</div><div class="workspace-mini-value">Approve / Review / Veto</div></div>
+            <div class="workspace-mini"><div class="workspace-mini-label">Context</div><div class="workspace-mini-value">APIs + Web Signals</div></div>
+            <div class="workspace-mini"><div class="workspace-mini-label">Default</div><div class="workspace-mini-value">Guarded Lane</div></div>
+          </div>
+        </div>
+
+        <div class="scan-panel">
+          <div class="panel-header">🧠 Reasoning Scan</div>
+          <div class="panel-body">
+            <div class="analysis-form" style="margin-bottom:18px">
+              <div class="parlay-kicker">Eligible Value Bet</div>
+              <div class="parlay-copy">Select a value bet from today's board. Use the guarded scan for a fast production check, or full live verification when you want a slower from-scratch investigation.</div>
+              <div class="form-grid">
+                <div style="grid-column:1 / -1">
+                  <label for="analysis-candidate">Value Bet to Review</label>
+                  <select id="analysis-candidate" onchange="selectReasoningCandidate(this.value)">
+                    <option value="">Choose a value bet from today's board…</option>
+                  </select>
+                </div>
+              </div>
+              <div class="analysis-helper-row">
+                <button class="analysis-helper-btn" type="button" onclick="loadReasoningCandidates()">↻ Refresh Candidates</button>
+              </div>
+              <div class="analysis-actions">
+                <button class="btn-scan" id="btn-reasoning-scan" onclick="runReasoningScan()" style="margin-left:0">
+                  <span>🧠</span> Run Reasoning Scan
+                </button>
+                <button class="analysis-helper-btn" id="btn-reasoning-full-live" type="button" onclick="runReasoningScan('full_live')">
+                  Full Live Verification
+                </button>
+                <span class="analysis-status" id="reasoning-status">Choose one of today's eligible value bets.</span>
+              </div>
+              <div class="launch-support-strip compact">
+                <div class="launch-support-item">
+                  <span class="launch-support-tag production">Guarded</span>
+                  Fast board re-check with fresh context.
+                </div>
+                <div class="launch-support-item">
+                  <span class="launch-support-tag review">Full Live</span>
+                  Slower rebuild for stronger manual verification.
+                </div>
+              </div>
+              <div class="analysis-brief" id="reasoning-candidate-brief"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="scan-panel">
+          <div class="panel-header">📝 Analysis Output
+            <div class="ph-right"><div class="analysis-meta" id="analysis-meta"></div></div>
+          </div>
+          <div class="analysis-output-body panel-body" id="analysis-output" style="min-height:200px">
+            <div style="color:var(--text3)">Select a value bet and run the reasoning scan.</div>
+          </div>
+        </div>
+
+        <div class="scan-panel">
+          <div class="panel-header">🔧 Manual Sandbox
+            <div class="ph-right"><span style="font-size:.75rem;color:var(--text3)">Exploratory only</span></div>
+          </div>
+          <div class="panel-body">
+            <div class="analysis-form">
+              <div class="parlay-copy">Use this for exploratory diagnostics only. It can help investigate a matchup, but it is not the production decision path used by the board.</div>
+              <div class="form-grid">
+                <div>
+                  <label for="analysis-sport">Sport</label>
+                  <select id="analysis-sport" onchange="syncAnalysisBetDraft()">
+                    <option value="soccer">Soccer</option>
+                    <option value="basketball">Basketball</option>
+                    <option value="mlb">MLB</option>
+                    <option value="nhl">NHL</option>
+                    <option value="tennis">Tennis</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="analysis-market">Market</label>
+                  <select id="analysis-market" onchange="syncAnalysisBetDraft()">
+                    <option value="h2h">Moneyline / H2H</option>
+                    <option value="spreads">Spread</option>
+                    <option value="totals">Total</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-grid">
+                <div>
+                  <label for="analysis-home">Home Team</label>
+                  <input id="analysis-home" type="text" placeholder="Arsenal" oninput="syncAnalysisBetDraft()" />
+                </div>
+                <div>
+                  <label for="analysis-away">Away Team</label>
+                  <input id="analysis-away" type="text" placeholder="Chelsea" oninput="syncAnalysisBetDraft()" />
+                </div>
+              </div>
+              <div class="form-grid">
+                <div>
+                  <label for="analysis-selection">Selection</label>
+                  <select id="analysis-selection" onchange="syncAnalysisBetDraft()">
+                    <option value="">Auto-detect</option>
+                    <option value="home">Home</option>
+                    <option value="away">Away</option>
+                    <option value="draw">Draw</option>
+                    <option value="over">Over</option>
+                    <option value="under">Under</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="analysis-price">Manual Odds</label>
+                  <input id="analysis-price" type="number" step="0.01" min="1.01" placeholder="e.g. 2.15" />
+                </div>
+              </div>
+              <div>
+                <label for="analysis-bet">Bet Description</label>
+                <textarea id="analysis-bet" placeholder="Arsenal moneyline at 2.15"></textarea>
+              </div>
+              <div class="analysis-helper-row">
+                <button class="analysis-helper-btn" type="button" onclick="syncAnalysisBetDraft(true)">Autofill</button>
+                <button class="analysis-helper-btn" type="button" onclick="clearDeepAnalysisForm()">Clear</button>
+              </div>
+              <div class="analysis-actions">
+                <button class="btn-scan" id="btn-analyze-game" onclick="runDeepAnalysis()" style="margin-left:0">
+                  <span>🧠</span> Analyze Game
+                </button>
+                <span class="analysis-status" id="analysis-status">Ready.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div><!-- /page-reasoning -->
+
+      <!-- ══ PAGE: SCAN ══ -->
+      <div class="page" id="page-scan">
+        <div class="workspace-hero">
+          <div>
+            <div class="workspace-hero-eyebrow">Run Desk</div>
+            <div class="workspace-hero-title">Control refreshes, protect quota, and launch scans.</div>
+          </div>
+          <div class="workspace-hero-stats">
+            <div class="workspace-mini"><div class="workspace-mini-label">Primary Mode</div><div class="workspace-mini-value">Refresh + Reuse</div></div>
+            <div class="workspace-mini"><div class="workspace-mini-label">Quota Strategy</div><div class="workspace-mini-value">Live or Saved Odds</div></div>
+            <div class="workspace-mini"><div class="workspace-mini-label">Deep Analysis</div><div class="workspace-mini-value">See Reasoning page</div></div>
+            <div class="workspace-mini"><div class="workspace-mini-label">Best Use</div><div class="workspace-mini-value">Operate, Verify</div></div>
+          </div>
+        </div>
+
+        <div class="scan-controls">
+          <div class="scan-row">
+            <div class="scan-group">
+              <label>Sport</label>
+              <div class="chip-group">
+                <button class="chip active" data-scan="sport" data-val="all" onclick="toggleScanSingle(this,'sport')">All</button>
+                <button class="chip" data-scan="sport" data-val="soccer" onclick="toggleScanSingle(this,'sport')">⚽ Soccer</button>
+                <button class="chip" data-scan="sport" data-val="basketball" onclick="toggleScanSingle(this,'sport')">🏀 NBA</button>
+                <button class="chip" data-scan="sport" data-val="mlb" onclick="toggleScanSingle(this,'sport')">⚾ MLB</button>
+                <button class="chip" data-scan="sport" data-val="nhl" onclick="toggleScanSingle(this,'sport')">🏒 NHL</button>
+                <button class="chip" data-scan="sport" data-val="tennis" onclick="toggleScanSingle(this,'sport')">🎾 ATP</button>
+                <button class="chip" data-scan="sport" data-val="tennis_wta" onclick="toggleScanSingle(this,'sport')">🎾 WTA</button>
+              </div>
+            </div>
+            <div class="scan-group">
+              <label>Market</label>
+              <div class="chip-group">
+                <button class="chip active" data-scan="market" data-val="all" onclick="toggleScanSingle(this,'market')">All</button>
+                <button class="chip" data-scan="market" data-val="moneyline" onclick="toggleScanSingle(this,'market')">💰 Moneyline</button>
+                <button class="chip" data-scan="market" data-val="spreads" onclick="toggleScanSingle(this,'market')">📏 Spreads</button>
+                <button class="chip" data-scan="market" data-val="totals" onclick="toggleScanSingle(this,'market')">🎯 Totals</button>
+              </div>
+            </div>
+            <div class="scan-group">
+              <label>Options</label>
+              <div class="chip-group">
+                <button class="chip" id="chip-retrain" data-scan="option" data-val="retrain" onclick="toggleScanOption(this)">🔄 Retrain models</button>
+                <button class="chip" id="chip-offline-odds" data-scan="option" data-val="offline_odds" onclick="toggleScanOption(this)">🗂 Saved odds</button>
+                <button class="chip" id="chip-force-fresh-odds" data-scan="option" data-val="force_fresh_odds" onclick="toggleScanOption(this)">💧 Force fresh odds</button>
+                <button class="chip" id="chip-lean-context" data-scan="option" data-val="lean_context" onclick="toggleScanOption(this)">🪶 Lean context</button>
+                <button class="chip" id="chip-context-referee" data-scan="option" data-val="context_referee" onclick="toggleScanOption(this)">🧠 Context referee</button>
+                <button class="chip" id="chip-full-soccer-scope" data-scan="option" data-val="full_soccer_scope" onclick="toggleScanOption(this)">⚽ Full soccer scope</button>
+              </div>
+            </div>
+            <button class="btn-scan" id="btn-scan" onclick="startScan()">
+              <span id="scan-btn-icon">⚡</span> Run Scan
+            </button>
+            <button class="btn-scan" id="btn-stop" onclick="stopScan()" style="display:none;background:#dc2626;margin-left:8px">⏹ Stop</button>
+            <button class="btn-scan" id="btn-closing" onclick="fetchClosingOdds()" style="background:#7c3aed;margin-left:8px" title="Fetch closing odds">📉 Closing</button>
+            <button class="btn-scan" id="btn-settle" onclick="runSettle()" style="background:#b45309;margin-left:8px" title="Settle overdue bets">✅ Settle</button>
+          </div>
+          <div class="scan-helper">
+            <strong>Live refresh:</strong> leave "Saved odds" off to refresh and cache fresh odds.
+            <strong style="margin-left:10px">True rescan:</strong> turn on "Force fresh odds" to bypass odds caches for this run.
+            <strong>Cache-only rerun:</strong> turn it on for repeatable reruns without API calls.
+          </div>
+        </div>
+
+        <div class="scan-panel">
+          <div class="panel-header">📡 Scan Log
+            <div class="ph-right"><span id="scan-status-badge" style="font-size:.75rem;color:var(--text3)">Idle</span></div>
+          </div>
+          <div id="scan-log" class="scan-log">
+            <div style="color:var(--text3)">Scan output will appear here…</div>
+          </div>
+        </div>
+
+        <div class="scan-panel">
+          <div class="panel-header">📊 API Usage Today</div>
+          <div class="panel-body" id="scan-api-usage">Loading…</div>
+        </div>
+      </div><!-- /page-scan -->
+
+      <!-- ══ PAGE: API MANAGER ══ -->
+      <div class="page" id="page-apis">
+        <div class="scan-panel">
+          <div class="panel-header">🔌 API Health
+            <div class="ph-right">
+              <button onclick="loadApis()" style="background:none;border:1px solid var(--border);color:var(--text2);padding:5px 14px;border-radius:var(--r);cursor:pointer;font-size:.78rem">↻ Refresh</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="api-cards" id="api-cards">
+              <div class="empty-state" style="padding:30px"><p>Checking APIs…</p></div>
+            </div>
+          </div>
+        </div>
+        <div class="api-edit-form">
+          <h3>🔑 Update API Key</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Variable</label>
+              <select id="key-var" onchange="updateApiKeyInputHelp()">
+                <optgroup label="Data &amp; Sports">
+                <option value="ODDS_API_KEY">The Odds API Key</option>
+                <option value="ODDS_API_KEYS">The Odds API Key Pool</option>
+                <option value="FOOTBALL_DATA_API_KEY">Football-Data.org Key</option>
+                <option value="BALLDONTLIE_API_KEY">BallDontLie (NBA) Key</option>
+                <option value="API_SPORTS_KEY">API-Sports Key</option>
+                <option value="RAPIDAPI_KEY">RapidAPI Key</option>
+                <option value="OPENWEATHER_API_KEY">OpenWeather Key</option>
+                </optgroup>
+                <optgroup label="Reasoning / LLM">
+                <option value="ANTHROPIC_API_KEY">Anthropic (Claude) Key ★ recommended</option>
+                <option value="CLAUDE_REASONING_MODEL">Claude Model (e.g. claude-haiku-4-5-20251001)</option>
+                <option value="OPENROUTER_API_KEY">OpenRouter Key (fallback)</option>
+                <option value="OPENROUTER_REASONING_MODEL">OpenRouter Model</option>
+                </optgroup>
+                <optgroup label="Notifications &amp; Settings">
+                <option value="TELEGRAM_TOKEN">Telegram Bot Token</option>
+                <option value="TELEGRAM_CHAT_ID">Telegram Chat ID</option>
+                <option value="INITIAL_BANKROLL">Bankroll (£)</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>New Value</label>
+              <textarea id="key-value" rows="3" placeholder="Paste new key here…"></textarea>
+              <div style="font-size:.76rem;color:var(--text3);margin-top:6px" id="key-value-help">
+                For <code>ODDS_API_KEYS</code>, paste comma-separated keys or one key per line.
+              </div>
+            </div>
+            <button class="btn-save" onclick="saveApiKey()">Save</button>
+          </div>
+        </div>
+      </div><!-- /page-apis -->
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /shell -->
+
+<!-- PARLAY BUILDER PANEL -->
+<div class="parlay-builder" id="parlay-panel">
+  <div class="pb-header">
+    <div class="pb-title">Parlay Builder</div>
+    <div class="pb-count" id="pb-count">0</div>
+    <button class="pb-close" onclick="toggleParlayPanel()">✕</button>
+  </div>
+  <div class="pb-subcopy">Build from the current daily slate. Two or more legs unlock the probability and stake view.</div>
+  <div class="pb-progress">
+    <div class="pb-progress-top">
+      <span>Build Progress</span>
+      <span id="pb-progress-label">Add 2 legs to calculate</span>
+    </div>
+    <div class="pb-progress-bar">
+      <div class="pb-progress-fill" id="pb-progress-fill"></div>
+    </div>
+  </div>
+  <div class="pb-legs" id="pb-legs">
+    <div class="pb-empty">
+      <div class="icon">🔗</div>
+      <p>Click any bet card to add it to your parlay</p>
+    </div>
+  </div>
+  <div class="pb-stats" id="pb-stats" style="display:none">
+    <div class="pb-stat"><div class="pb-stat-label">Combined Odds</div><div class="pb-stat-val blue" id="pb-odds">—</div></div>
+    <div class="pb-stat"><div class="pb-stat-label">Win Chance</div><div class="pb-stat-val" id="pb-winprob">—</div></div>
+    <div class="pb-stat"><div class="pb-stat-label">Expected Value</div><div class="pb-stat-val green" id="pb-ev">—</div></div>
+    <div class="pb-stat"><div class="pb-stat-label">Kelly Stake</div><div class="pb-stat-val" id="pb-kelly">—</div></div>
+  </div>
+  <div class="pb-name-row" id="pb-name-row" style="display:none">
+    <input class="pb-name-input" id="pb-name-input" type="text" placeholder="Name this parlay (optional)…" maxlength="60"/>
+  </div>
+  <div class="pb-footer">
+    <button class="btn-calc" id="pb-calc-btn" onclick="calculateParlay()" disabled>Calculate Parlay</button>
+    <button class="btn-calc" id="pb-save-btn" onclick="saveParlay()" style="display:none;background:#7c3aed;margin-top:8px">💾 Save Parlay</button>
+    <button class="btn-clear" onclick="clearParlay()">Clear All</button>
+  </div>
+</div>
+
+<!-- FLOATING FAB -->
+<button class="parlay-fab" id="parlay-fab" onclick="toggleParlayPanel()" style="display:none">
+  🔗 My Parlay <div class="fab-count" id="fab-count">0</div>
+</button>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<!-- AI PARLAY BUILDER MODAL -->
+<div id="ai-parlay-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;align-items:center;justify-content:center;padding:16px">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);width:100%;max-width:640px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column">
+    <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:1.05rem;font-weight:700;color:var(--text)">🤖 AI Parlay Builder</div>
+        <div style="font-size:.8rem;color:var(--text3);margin-top:2px" id="ai-parlay-subtitle">Choose which games to build from…</div>
+      </div>
+      <button onclick="closeAiParlayModal()" style="background:none;border:none;color:var(--text3);font-size:1.3rem;cursor:pointer;line-height:1">×</button>
+    </div>
+    <!-- Window selector — shown before build starts -->
+    <div id="ai-parlay-window-picker" style="padding:20px 24px;border-bottom:1px solid var(--border)">
+      <div style="font-size:.8rem;color:var(--text3);margin-bottom:12px;font-weight:500">BUILD FROM</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="ai-window-btn active" onclick="startAiParlayBuild('today',this)">
+          🗓 Today's games
+        </button>
+        <button class="ai-window-btn" onclick="startAiParlayBuild('tomorrow',this)">
+          🌅 Tomorrow's games
+        </button>
+        <button class="ai-window-btn" onclick="startAiParlayBuild('both',this)">
+          📅 Today + Tomorrow
+        </button>
+      </div>
+    </div>
+    <div style="padding:16px 24px;flex:1">
+      <div id="ai-parlay-log" style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px"></div>
+      <div id="ai-parlay-result" style="display:none"></div>
+    </div>
+    <div id="ai-parlay-footer" style="display:none;padding:14px 24px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end">
+      <button onclick="closeAiParlayModal()" style="background:rgba(148,163,184,.1);border:1px solid var(--border);color:var(--text2);border-radius:var(--r);padding:8px 18px;font-size:.85rem;cursor:pointer">Close</button>
+      <button id="ai-parlay-view-btn" onclick="viewAiParlay()" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:none;border-radius:var(--r);padding:8px 18px;font-size:.85rem;cursor:pointer;font-weight:600">View Saved Parlay</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js?v={{ app_js_v }}"></script>
+</body>
+</html>

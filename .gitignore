@@ -1,0 +1,50 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS/editor local files
+.DS_Store
+.vscode/
+.idea/
+.claude/
+
+# Runtime/generated data
+logs/
+webapp/logs/
+reports/
+data/cache/
+data/raw/
+data/processed/
+data/tracker/
+data/models/
+data/api_usage.json
+data/odds_key_pool.json
+data/team_ids.json
+
+# Large/model artifacts
+*.joblib
+*.pkl
+*.pickle
+*.parquet
+*.sqlite
+*.sqlite3
+
+# Local app/runtime output
+instance/
+*.log

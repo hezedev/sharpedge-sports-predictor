@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Edges — Tennis</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    /* ── Layout ── */
+    body { background: #0d0f14; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; margin: 0; }
+    .live-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 24px; border-bottom: 1px solid #1e2332;
+      background: #111420;
+    }
+    .live-header h1 { font-size: 1.1rem; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; }
+    .live-dot { width: 9px; height: 9px; border-radius: 50%; background: #ef4444; animation: pulse 1.4s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .nav-back { color: #94a3b8; text-decoration: none; font-size:.85rem; }
+    .nav-back:hover { color: #e2e8f0; }
+    .status-bar {
+      display: flex; align-items: center; gap: 16px;
+      padding: 10px 24px; font-size: .8rem; color: #64748b;
+      border-bottom: 1px solid #1e2332;
+    }
+    .status-bar span { display: flex; align-items: center; gap: 5px; }
+    .refresh-btn {
+      margin-left: auto; padding: 4px 12px; border-radius: 6px;
+      border: 1px solid #334155; background: transparent; color: #94a3b8;
+      font-size: .78rem; cursor: pointer;
+    }
+    .refresh-btn:hover { background: #1e2332; color: #e2e8f0; }
+    .main { padding: 20px 24px; max-width: 1100px; margin: 0 auto; }
+
+    /* ── Sections ── */
+    .section-title {
+      font-size: .72rem; font-weight: 600; letter-spacing: .08em;
+      text-transform: uppercase; color: #475569; margin: 20px 0 10px;
+    }
+
+    /* ── Edge card ── */
+    .edge-card {
+      background: #111420; border: 1px solid #1e2332; border-radius: 10px;
+      padding: 16px 18px; margin-bottom: 12px;
+    }
+    .edge-card.strong { border-left: 3px solid #22c55e; }
+    .edge-card.medium { border-left: 3px solid #f59e0b; }
+    .edge-card.watch  { border-left: 3px solid #64748b; }
+    .edge-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .edge-match { font-weight: 600; font-size: .95rem; }
+    .edge-badge {
+      display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+    }
+    .badge {
+      padding: 3px 9px; border-radius: 20px; font-size: .72rem; font-weight: 600;
+    }
+    .badge-edge   { background: #14532d; color: #4ade80; }
+    .badge-conf   { background: #1e293b; color: #94a3b8; }
+    .badge-odds   { background: #1e1a0a; color: #fbbf24; }
+    .badge-market { background: #0f172a; color: #7dd3fc; border: 1px solid #1e3a5f; }
+
+    /* ── Signal cards ── */
+    .signals-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px;
+    }
+    .signal-card {
+      background: #0f1420; border: 1px solid #1e2332; border-left: 3px solid #334155;
+      border-radius: 8px; padding: 12px 14px;
+    }
+    .signal-header { display: flex; justify-content: space-between; align-items: center;
+      font-size: .72rem; color: #64748b; margin-bottom: 6px; }
+    .signal-match { font-size: .82rem; font-weight: 600; color: #cbd5e1; margin-bottom: 4px; }
+    .signal-label { font-size: .9rem; font-weight: 600; color: #38bdf8; margin-bottom: 4px; }
+    .signal-trigger { font-size: .72rem; color: #64748b; }
+    .bet-on { font-size: .82rem; color: #94a3b8; margin-bottom: 8px; }
+    .bet-on strong { color: #38bdf8; }
+    .probs { display: flex; gap: 16px; font-size: .8rem; color: #64748b; margin-bottom: 10px; }
+    .probs span { display: flex; flex-direction: column; }
+    .probs .val { font-size: .95rem; font-weight: 600; color: #e2e8f0; }
+    .triggers { list-style: none; margin: 0; padding: 0; }
+    .triggers li {
+      font-size: .78rem; color: #94a3b8; padding: 3px 0;
+      border-top: 1px solid #1e2332; padding-top: 5px;
+    }
+    .triggers li:first-child { border-top: none; padding-top: 0; }
+    .triggers li::before { content: "↳ "; color: #475569; }
+
+    /* ── Match card ── */
+    .match-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px;
+    }
+    .match-card {
+      background: #111420; border: 1px solid #1e2332; border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .match-players { font-size: .88rem; font-weight: 600; margin-bottom: 6px; }
+    .match-score { font-size: 1.05rem; font-weight: 700; color: #38bdf8; letter-spacing: .04em; }
+    .match-meta { font-size: .72rem; color: #64748b; margin-top: 4px; }
+    .server-dot { display: inline-block; width:7px; height:7px; border-radius:50%; background:#22c55e; margin-right:4px; }
+
+    /* ── Empty state ── */
+    .empty {
+      text-align: center; padding: 60px 20px; color: #475569;
+    }
+    .empty .icon { font-size: 2.5rem; margin-bottom: 12px; }
+    .empty p { font-size: .88rem; }
+
+    /* ── Countdown ── */
+    #countdown { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+
+<div class="live-header">
+  <h1>
+    <span class="live-dot"></span>
+    Live Edge Scanner — Tennis
+  </h1>
+  <a href="/" class="nav-back">← Back to picks</a>
+</div>
+
+<div class="status-bar">
+  <span>🎾 <span id="scanned-count">—</span> live matches</span>
+  <span>⚡ <span id="edge-count">—</span> edges &nbsp;·&nbsp; <span id="signal-count">—</span> signals</span>
+  <span>🕐 Next refresh in <span id="countdown">30</span>s</span>
+  <span id="last-updated"></span>
+  <button class="refresh-btn" onclick="refresh(true)">↻ Refresh now</button>
+</div>
+
+<div class="main">
+  <div id="edges-section">
+    <div class="section-title">Live Edges</div>
+    <div id="edges-container">
+      <div class="empty"><div class="icon">📡</div><p>Loading…</p></div>
+    </div>
+  </div>
+
+  <div id="matches-section">
+    <div class="section-title">All Live Matches</div>
+    <div class="match-grid" id="matches-container"></div>
+  </div>
+</div>
+
+<script>
+const REFRESH_INTERVAL = 30;
+let countdown = REFRESH_INTERVAL;
+let timer = null;
+
+function edgeClass(edge) {
+  if (edge >= 0.10) return 'strong';
+  if (edge >= 0.07) return 'medium';
+  return 'watch';
+}
+
+function confidenceLabel(c) {
+  if (c >= 75) return '🟢';
+  if (c >= 60) return '🟡';
+  return '🔴';
+}
+
+function scoreDisplay(m) {
+  const sets = `${m.p1_sets}–${m.p2_sets}`;
+  const games = `(${m.p1_games}–${m.p2_games})`;
+  return `${sets} ${games}`;
+}
+
+function serverLabel(m) {
+  if (!m.server) return '';
+  const name = m.server === 1 ? m.p1_name : m.p2_name;
+  const short = name.split(' ').pop();
+  return `<span class="server-dot"></span>${short} serving`;
+}
+
+const MARKET_ICON = {
+  'Live Match Winner': '🎾',
+  'Total Games':       '🔢',
+  'Games Handicap':    '📊',
+  'Current Set Winner':'🏆',
+  'Server to Hold':    '💪',
+  'Receiver to Break': '⚡',
+  'Tiebreak in Set':   '🎲',
+};
+
+function renderEdges(edges) {
+  const el = document.getElementById('edges-container');
+  const real    = edges.filter(e => !e.is_signal);
+  const signals = edges.filter(e => e.is_signal);
+
+  if (!edges.length) {
+    el.innerHTML = `<div class="empty">
+      <div class="icon">🔍</div>
+      <p>No edges or signals right now.<br>
+         Scan refreshes every ${REFRESH_INTERVAL}s while matches are live.</p>
+    </div>`;
+    return;
+  }
+
+  let html = '';
+
+  if (real.length) {
+    html += `<div class="section-title" style="margin-top:0">Actionable Edges</div>`;
+    html += real.map(e => `
+      <div class="edge-card ${edgeClass(e.edge)}">
+        <div class="edge-header">
+          <div class="edge-match">
+            <span style="opacity:.6;margin-right:6px">${MARKET_ICON[e.market]||'🎾'}</span>
+            ${e.p1_name} vs ${e.p2_name}
+          </div>
+          <div class="edge-badge">
+            <span class="badge badge-market">${e.market}</span>
+            <span class="badge badge-edge">${e.edge_pct}</span>
+            <span class="badge badge-conf">${confidenceLabel(e.confidence)} ${e.confidence}/100</span>
+            <span class="badge badge-odds">@ ${e.odds.toFixed(2)}</span>
+          </div>
+        </div>
+        <div class="bet-on">Bet: <strong>${e.bet_on}</strong> &nbsp;·&nbsp; via ${e.bookmaker}</div>
+        <div class="probs">
+          <span>Model<div class="val">${(e.model_prob*100).toFixed(1)}%</div></span>
+          <span>Market<div class="val">${(e.market_prob*100).toFixed(1)}%</div></span>
+          <span>Fair odds<div class="val">${(1/e.model_prob).toFixed(2)}</div></span>
+        </div>
+        ${e.triggers.length ? `<ul class="triggers">${e.triggers.map(t=>`<li>${t}</li>`).join('')}</ul>` : ''}
+      </div>`).join('');
+  }
+
+  if (signals.length) {
+    html += `<div class="section-title">Probability Signals <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#475569">— no direct market odds, watch only</span></div>`;
+    html += `<div class="signals-grid">` + signals.map(e => `
+      <div class="signal-card">
+        <div class="signal-header">
+          <span>${MARKET_ICON[e.market]||'📡'} ${e.market}</span>
+          <span class="badge badge-conf" style="font-size:.68rem">${confidenceLabel(e.confidence)}</span>
+        </div>
+        <div class="signal-match">${e.p1_name} vs ${e.p2_name}</div>
+        <div class="signal-label">${e.signal_label}</div>
+        ${e.triggers.length ? `<div class="signal-trigger">${e.triggers[0]}</div>` : ''}
+      </div>`).join('') + `</div>`;
+  }
+
+  el.innerHTML = html;
+}
+
+function renderMatches(matches) {
+  const el = document.getElementById('matches-container');
+  if (!matches.length) {
+    el.innerHTML = '<p style="color:#475569;font-size:.82rem">No live matches found.</p>';
+    return;
+  }
+  el.innerHTML = matches.map(m => `
+    <div class="match-card">
+      <div class="match-players">${m.p1_name}<br><span style="color:#64748b">vs</span> ${m.p2_name}</div>
+      <div class="match-score">${scoreDisplay(m)}</div>
+      <div class="match-meta">
+        Set ${m.current_set} &nbsp;·&nbsp; ${m.description}
+        ${m.server ? `<br>${serverLabel(m)}` : ''}
+        ${(m.recent_p1 + m.recent_p2) > 0 ? `<br>Last 5 games: ${m.p1_name.split(' ').pop()} ${m.recent_p1} – ${m.recent_p2} ${m.p2_name.split(' ').pop()}` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function refresh(force = false) {
+  try {
+    const url = '/api/live/edges' + (force ? '?force=true' : '');
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    const allEdges = data.edges ?? [];
+    const realEdges = allEdges.filter(e => !e.is_signal);
+    const sigEdges  = allEdges.filter(e => e.is_signal);
+    document.getElementById('scanned-count').textContent = data.scanned ?? 0;
+    document.getElementById('edge-count').textContent = realEdges.length;
+    document.getElementById('signal-count').textContent = sigEdges.length;
+    if (data.ts) {
+      const d = new Date(data.ts * 1000);
+      document.getElementById('last-updated').textContent =
+        '· Updated ' + d.toLocaleTimeString();
+    }
+
+    renderEdges(data.edges ?? []);
+    renderMatches(data.matches ?? []);
+  } catch (err) {
+    console.error('Live scan error:', err);
+  }
+  resetCountdown();
+}
+
+function resetCountdown() {
+  countdown = REFRESH_INTERVAL;
+  clearInterval(timer);
+  timer = setInterval(() => {
+    countdown--;
+    document.getElementById('countdown').textContent = countdown;
+    if (countdown <= 0) refresh();
+  }, 1000);
+}
+
+// Initial load
+refresh(true);
+</script>
+</body>
+</html>
