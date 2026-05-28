@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, asdict
@@ -206,6 +207,46 @@ def _search_google_news_rss(query: str, limit: int, timeout: int) -> tuple[list[
         return [], str(exc)
 
 
+def _search_newsapi(query: str, limit: int, timeout: int) -> tuple[list[NewsItem], str | None]:
+    api_key = os.environ.get("NEWS_API_KEY", "").strip()
+    if not api_key:
+        return [], "newsapi_not_configured"
+    try:
+        response = requests.get(
+            "https://newsapi.org/v2/everything",
+            params={
+                "q": query,
+                "pageSize": max(1, min(limit, 10)),
+                "language": "en",
+                "sortBy": "publishedAt",
+                "apiKey": api_key,
+            },
+            headers={"User-Agent": "Mozilla/5.0 SportsPredictor/1.0"},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        items: list[NewsItem] = []
+        for article in payload.get("articles") or []:
+            if not isinstance(article, dict):
+                continue
+            title = _clean_text(str(article.get("title") or ""))
+            snippet = _clean_text(str(article.get("description") or article.get("content") or ""))
+            link = _clean_url(str(article.get("url") or ""))
+            source_payload = article.get("source") or {}
+            source = _clean_text(str(source_payload.get("name") if isinstance(source_payload, dict) else ""))
+            if not source:
+                source = _source_name(link)
+            if title and link:
+                items.append(NewsItem(title=title, snippet=snippet, url=link, source=source.lower().replace("www.", "")))
+            if len(items) >= limit:
+                break
+        return items, None
+    except Exception as exc:
+        logger.info("Fresh NewsAPI context unavailable: %s", exc)
+        return [], str(exc)
+
+
 def _search_gdelt_doc(query: str, limit: int, timeout: int) -> tuple[list[NewsItem], str | None]:
     global _GDELT_PAUSED_UNTIL, _GDELT_PAUSE_REASON
     now = datetime.now(timezone.utc)
@@ -255,6 +296,9 @@ def _search_gdelt_doc(query: str, limit: int, timeout: int) -> tuple[list[NewsIt
 
 
 def _search_context(query: str, limit: int, timeout: int) -> tuple[list[NewsItem], str | None]:
+    newsapi_items, newsapi_error = _search_newsapi(query, limit=limit, timeout=timeout)
+    if newsapi_items:
+        return newsapi_items, None
     gdelt_items, gdelt_error = _search_gdelt_doc(query, limit=limit, timeout=timeout)
     if gdelt_items:
         return gdelt_items, None
@@ -271,6 +315,8 @@ def _search_context(query: str, limit: int, timeout: int) -> tuple[list[NewsItem
         errors.append(f"gdelt:{gdelt_error}")
     if fallback_error:
         errors.append(f"google_news:{fallback_error}")
+    if newsapi_error and newsapi_error != "newsapi_not_configured":
+        errors.append(f"newsapi:{newsapi_error}")
     return [], "; ".join(errors) if errors else None
 
 

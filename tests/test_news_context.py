@@ -65,6 +65,7 @@ def test_google_news_rss_pauses_after_timeout(monkeypatch) -> None:
 
 
 def test_search_context_uses_gdelt_before_google_news(monkeypatch) -> None:
+    monkeypatch.delenv("NEWS_API_KEY", raising=False)
     monkeypatch.setattr(news_context, "_GDELT_PAUSED_UNTIL", None)
     monkeypatch.setattr(news_context, "_GDELT_PAUSE_REASON", "")
 
@@ -104,6 +105,41 @@ def test_search_context_uses_gdelt_before_google_news(monkeypatch) -> None:
     assert [item.source for item in items] == ["example.com"]
     assert ddg_calls["count"] == 0
     assert google_calls["count"] == 0
+
+
+def test_search_context_uses_newsapi_before_scrape_fallbacks(monkeypatch) -> None:
+    monkeypatch.setenv("NEWS_API_KEY", "news-key")
+    fallback_calls = {"gdelt": 0, "duck": 0, "google": 0}
+
+    class _NewsAPIResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "articles": [
+                    {
+                        "title": "Alpha FC team news and injuries",
+                        "description": "Projected lineup notes are available.",
+                        "url": "https://news.example.com/alpha",
+                        "source": {"name": "News Example"},
+                    }
+                ]
+            }
+
+    def _fake_get(*args, **kwargs):
+        return _NewsAPIResponse()
+
+    monkeypatch.setattr(news_context.requests, "get", _fake_get)
+    monkeypatch.setattr(news_context, "_search_gdelt_doc", lambda *args, **kwargs: fallback_calls.__setitem__("gdelt", 1) or ([], "gdelt"))
+    monkeypatch.setattr(news_context, "_search_duckduckgo", lambda *args, **kwargs: fallback_calls.__setitem__("duck", 1) or ([], "duck"))
+    monkeypatch.setattr(news_context, "_search_google_news_rss", lambda *args, **kwargs: fallback_calls.__setitem__("google", 1) or ([], "google"))
+
+    items, error = news_context._search_context("Alpha FC Beta FC lineup", limit=2, timeout=1)
+
+    assert error is None
+    assert [item.source for item in items] == ["news example"]
+    assert fallback_calls == {"gdelt": 0, "duck": 0, "google": 0}
 
 
 def test_soccer_news_channels_include_lineup_and_availability_sources() -> None:

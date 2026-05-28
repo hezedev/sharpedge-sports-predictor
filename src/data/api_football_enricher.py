@@ -26,6 +26,7 @@ import pandas as pd
 
 from src.utils.cache import DiskCache
 from src.utils.helpers import RateLimiter
+from src.data.provider_health import provider_quota_low, record_provider_response
 
 logger = logging.getLogger(__name__)
 
@@ -233,8 +234,13 @@ class APIFootballEnricher:
     def _get_json(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if self._is_temporarily_disabled():
             raise RuntimeError(self._disabled_reason or "API-Football enrichment temporarily paused")
+        provider_key = "api_sports_football" if self.provider == "api_sports" else "rapidapi_football"
+        if provider_quota_low(provider_key):
+            raise RuntimeError(f"{provider_key} quota is low; skipping live enrichment")
         url = f"{self.base_url}/{path.lstrip('/')}"
         resp = self._cache.get(url, headers=self.headers, params=params or {}, timeout=10)
+        if not getattr(resp, "from_cache", False):
+            record_provider_response(provider_key, resp)
         if resp.status_code == 403:
             self._temporarily_disable(hours=6, reason="403 Forbidden from API-Football")
         elif resp.status_code == 429:

@@ -13,6 +13,7 @@ import requests
 from config import settings
 
 from src.data.api_football_enricher import APIFootballEnricher
+from src.data.provider_health import provider_quota_low, record_provider_response
 from src.utils.cache import DiskCache
 from src.utils.helpers import RateLimiter
 
@@ -76,8 +77,12 @@ class _BasketballAvailabilityEnricher:
             return datetime.now(timezone.utc).date().isoformat()
 
     def _get_json(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        if provider_quota_low("api_sports_basketball"):
+            raise RuntimeError("api_sports_basketball quota is low; skipping live availability")
         url = f"{self.base_url}/{path.lstrip('/')}"
         resp = self._cache.get(url, headers=self.headers, params=params, timeout=10)
+        if not getattr(resp, "from_cache", False):
+            record_provider_response("api_sports_basketball", resp)
         resp.raise_for_status()
         return resp.json()
 

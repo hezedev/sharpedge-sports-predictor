@@ -4,6 +4,8 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Mapping
 
+from src.data.provider_health import provider_health_snapshot, provider_quota_low
+
 
 @dataclass(frozen=True)
 class SourceProvider:
@@ -228,6 +230,7 @@ def source_status_summary(env: Mapping[str, str] | None = None) -> dict:
             if provider.configured and provider.reliability.startswith("structured")
         ),
         "missing_critical": missing_critical,
+        "provider_health": provider_health_snapshot(),
         "recommendations": _recommendations(providers),
     }
 
@@ -245,4 +248,8 @@ def _recommendations(providers: list[SourceProvider]) -> list[str]:
         notes.append("Add ODDS_API_KEY or ODDS_API_KEYS before live market scans.")
     if "newsapi" not in configured:
         notes.append("Optional: add NEWS_API_KEY to reduce dependence on DuckDuckGo/Google timeouts for context search.")
+    if provider_quota_low("api_sports_football") or provider_quota_low("api_sports_basketball"):
+        notes.append("API-Sports quota is low; use lean/offline scans or cached availability until quota resets.")
+    if provider_quota_low("balldontlie"):
+        notes.append("BallDontLie quota is low; use existing season cache and avoid forced historical refreshes until reset.")
     return notes
