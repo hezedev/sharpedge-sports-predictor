@@ -51,12 +51,15 @@ class APIFootballEnricher:
     def __init__(self, cache_expire_hours: int = 24) -> None:
         rapidapi_key = os.environ.get("RAPIDAPI_KEY", "")
         api_sports_key = os.environ.get("API_SPORTS_KEY", "")
-        self.api_key = rapidapi_key or api_sports_key
-        self.provider = "rapidapi" if rapidapi_key else "api_sports"
+        # Prefer the direct API-Sports dashboard key when present. It avoids
+        # RapidAPI host/account mismatches that can surface as 403s even when a
+        # valid direct API-Football key is configured.
+        self.api_key = api_sports_key or rapidapi_key
+        self.provider = "api_sports" if api_sports_key else "rapidapi"
         self.base_url = (
-            "https://api-football-v1.p.rapidapi.com/v3"
-            if rapidapi_key
-            else "https://v3.football.api-sports.io"
+            "https://v3.football.api-sports.io"
+            if api_sports_key
+            else "https://api-football-v1.p.rapidapi.com/v3"
         )
         self.cache_expire_hours = cache_expire_hours
 
@@ -65,7 +68,7 @@ class APIFootballEnricher:
                 "X-RapidAPI-Key": self.api_key,
                 "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
             }
-            if rapidapi_key
+            if self.provider == "rapidapi"
             else {"x-apisports-key": self.api_key}
         )
 

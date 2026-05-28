@@ -246,17 +246,17 @@ def _current_api_min_gap_seconds(
     shorter gap.
     """
     if remaining is None or remaining == 9999:
-        return 1
+        return 2
 
     if remaining > 400:
-        return 1
-    if remaining > 250:
         return 2
+    if remaining > 250:
+        return 5
     if remaining > 150:
-        return 4
+        return 10
     if remaining > _ODDS_BUDGET_WARN:
-        return 8
-    return 15
+        return 20
+    return _API_MIN_GAP_SECONDS
 
 def _api_throttle() -> bool:
     """
@@ -1522,6 +1522,39 @@ def _isoformat_utc(value: object) -> Optional[str]:
     return parsed.isoformat() if parsed is not None else None
 
 
+def _prediction_temporal_context(game: dict, commence: object) -> dict[str, Any]:
+    prediction_time = datetime.now(timezone.utc).isoformat()
+    odds_timestamp = (
+        _isoformat_utc(game.get("_odds_bookmaker_last_update"))
+        or _isoformat_utc(game.get("_odds_fetched_at"))
+        or _isoformat_utc(game.get("_odds_cache_loaded_at"))
+        or prediction_time
+    )
+    return {
+        "game_start_time": _isoformat_utc(commence),
+        "prediction_time": prediction_time,
+        "data_as_of_time": prediction_time,
+        "odds_timestamp": odds_timestamp,
+    }
+
+
+def _finalize_prediction_temporal_context(ctx: dict[str, Any], *, sport: str, game: dict, commence: object) -> dict[str, Any]:
+    finalized = dict(ctx)
+    finalized.update(_prediction_temporal_context(game, commence))
+    fetched_at = finalized.get("availability_fetched_at") or finalized["prediction_time"]
+    sport_key = str(sport or "").lower()
+    if sport_key == "soccer":
+        finalized.setdefault("lineup_timestamp", fetched_at)
+        finalized.setdefault("lineup_as_of", fetched_at)
+    elif sport_key == "basketball":
+        finalized.setdefault("injury_report_timestamp", fetched_at)
+        finalized.setdefault("injury_as_of", fetched_at)
+    elif sport_key == "nhl":
+        finalized.setdefault("goalie_confirmation_timestamp", fetched_at)
+        finalized.setdefault("goalie_as_of", fetched_at)
+    return finalized
+
+
 def _game_last_update_dt(
     game: dict,
     *,
@@ -1803,7 +1836,7 @@ def fetch_odds(sport_key: str, markets: str = "h2h", priority: str = "high") -> 
     # earlier in this same scan process. "Force fresh" should bypass stale
     # disk/history, not re-burn the API 2-3 times for h2h/totals/spreads on
     # the exact same sport within the same run.
-    if sport_key in _odds_cache:
+    if not _FORCE_FRESH_ODDS and sport_key in _odds_cache:
         fetched_at, cached_data = _odds_cache[sport_key]
         age_minutes = (datetime.now() - fetched_at).total_seconds() / 60
         if age_minutes < _ODDS_CACHE_TTL_MINUTES:
@@ -5911,9 +5944,11 @@ def run_soccer(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
                 combined[col] = a_snap[col]
         ctx = {
             **ctx,
+            **_prediction_temporal_context(game, commence),
             **build_availability_context("soccer", game, combined),
             **build_environment_context("soccer", home_team, away_team, commence),
         }
+        ctx = _finalize_prediction_temporal_context(ctx, sport="soccer", game=game, commence=commence)
         game_info.update(ctx)
         full_game.update(ctx)
         full_game["history_rows"] = {"home": home_history_rows, "away": away_history_rows}
@@ -6019,7 +6054,39 @@ def run_soccer(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
             "structural_weight": round(float(soccer_blend.structural_weight), 3),
             "context_probability_adjustment": soccer_context_probability_adjustment,
         }
+        soccer_value_report = None
+        if home_odds and draw_odds and away_odds:
+            def _snapshot_float(*names: str, default: float) -> float:
+                for name in names:
+                    try:
+                        value = float(combined.get(name))
+                    except Exception:
+                        continue
+                    if pd.notna(value) and value > 0:
+                        return value
+                return default
+
+            try:
+                soccer_value_report = _SOCCER_SCORE_MODEL.build_value_report(
+                    expected_home_goals=_snapshot_float("home_dc_xg", "home_xg_proxy", default=1.30),
+                    expected_away_goals=_snapshot_float("away_dc_xg", "away_xg_proxy", default=1.10),
+                    odds_1x2={
+                        "home": float(home_odds),
+                        "draw": float(draw_odds),
+                        "away": float(away_odds),
+                    },
+                    model_probabilities={
+                        "home": final_probs[0],
+                        "draw": final_probs[1],
+                        "away": final_probs[2],
+                    },
+                    lineup_context=ctx,
+                ).as_dict()
+            except Exception as exc:
+                logger.debug("Soccer probability/value report unavailable for %s vs %s: %s", home_team, away_team, exc)
         game_info["soccer_probability_debug"] = soccer_probability_debug
+        if soccer_value_report:
+            game_info["soccer_value_report"] = soccer_value_report
 
         # Double-chance ML probabilities
         p_hd = min(p_home + p_draw, 0.99)
@@ -6041,6 +6108,8 @@ def run_soccer(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
         # ── Update game record with ML probabilities in place ─────────────────
         full_game["model_available"] = True
         full_game["soccer_probability_debug"] = soccer_probability_debug
+        if soccer_value_report:
+            full_game["soccer_value_report"] = soccer_value_report
         full_game["outcomes"] = [
             _outcome("Home Win",     home_team,              p_home, fp_home, home_odds,    home_bk, True),
             _outcome("Draw",         "Draw",                 p_draw, fp_draw, draw_odds or 0, draw_bk, True),
@@ -6438,7 +6507,7 @@ def run_basketball(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
 
         # Feature Store: fill in quarter-derived features from team history
         # instead of leaving them as 0 (which biases predictions toward average).
-        extras = _feat_store.get_basketball_extras(home_team, away_team)
+        extras = _feat_store.get_basketball_extras(home_team, away_team, before_time=commence)
         for feat, val in extras.items():
             if feat in feature_cols:
                 combined[feat] = val
@@ -6449,9 +6518,11 @@ def run_basketball(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
         ctx = _detect_contextual_flags(game, "basketball")
         ctx = {
             **ctx,
+            **_prediction_temporal_context(game, commence),
             **build_availability_context("basketball", game, combined),
             **build_environment_context("basketball", home_team, away_team, commence),
         }
+        ctx = _finalize_prediction_temporal_context(ctx, sport="basketball", game=game, commence=commence)
 
         x = pd.DataFrame([combined], columns=feature_cols)
         raw_p = trainer.ensemble_model.predict_proba(x)
@@ -6528,6 +6599,14 @@ def run_basketball(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
         game_record["model_available"] = True
         game_record["model_pick"] = home_team if p_home >= p_away else away_team
         game_record["basketball_probability_debug"] = basketball_probability_debug
+        basketball_value_report = _BASKETBALL_SIDE_MODEL.build_value_report(
+            snapshot=combined,
+            odds_moneyline={"home": float(home_odds), "away": float(away_odds)},
+            availability_context=ctx,
+            model_probabilities={"home": p_home, "away": p_away},
+            clv_status=str(ctx.get("clv_status", "pending") or "pending"),
+        ).as_dict()
+        game_record["basketball_value_report"] = basketball_value_report
 
         home_med = median_odds(game, home_team)
         away_med = median_odds(game, away_team)
@@ -6554,6 +6633,7 @@ def run_basketball(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
                      **_feature_freshness_context("basketball"),
                      **ctx}
         game_info["basketball_probability_debug"] = basketball_probability_debug
+        game_info["basketball_value_report"] = basketball_value_report
 
         # Single bets — today only
         for bet, bk_name in [
@@ -6952,6 +7032,8 @@ def run_tennis(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
                      .replace("_", " ").title()
         )
         logger.info("%s: %d upcoming matches", tournament_name, len(games))
+        if not games:
+            continue
 
         for game in games:
             p1_name = game["home_team"]
@@ -6962,30 +7044,30 @@ def run_tennis(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
             p1_odds, p1_bk, p1_stale = best_odds(game, p1_name)
             p2_odds, p2_bk, p2_stale = best_odds(game, p2_name)
 
-        _other_sport_games.append(enrich_with_capability({
-            "sport": "tennis_wta" if is_wta else "tennis",
-            "home": p1_name, "away": p2_name,
-            "league": tournament_name, "commence": commence,
-            "kick_off": _kick_off_label(commence), "window": window,
-            "home_odds": p1_odds, "away_odds": p2_odds,
-            "league_key": sport_key,
-            "available_market_keys": _extract_market_keys_from_odds_game(game),
-        }, sport="tennis_wta" if is_wta else "tennis", league=tournament_name, sport_key=sport_key))
+            _other_sport_games.append(enrich_with_capability({
+                "sport": "tennis_wta" if is_wta else "tennis",
+                "home": p1_name, "away": p2_name,
+                "league": tournament_name, "commence": commence,
+                "kick_off": _kick_off_label(commence), "window": window,
+                "home_odds": p1_odds, "away_odds": p2_odds,
+                "league_key": sport_key,
+                "available_market_keys": _extract_market_keys_from_odds_game(game),
+            }, sport="tennis_wta" if is_wta else "tennis", league=tournament_name, sport_key=sport_key))
 
-        if p1_odds is None or p2_odds is None:
-            continue
+            if p1_odds is None or p2_odds is None:
+                continue
 
-        _key_lower = sport_key.lower()
-        if any(t in _key_lower for t in ("clay", "roland_garros", "barcelona",
-                                          "monte_carlo", "rome", "madrid",
-                                          "hamburg", "gstaad", "bastad",
-                                          "umag", "kitzbuhel", "bucharest")):
-            match_surface = "Clay"
-        elif any(t in _key_lower for t in ("wimbledon", "queens", "halle",
-                                            "grass", "eastbourne", "hertogenbosch")):
-            match_surface = "Grass"
-        else:
-            match_surface = "Hard"
+            _key_lower = sport_key.lower()
+            if any(t in _key_lower for t in ("clay", "roland_garros", "barcelona",
+                                              "monte_carlo", "rome", "madrid",
+                                              "hamburg", "gstaad", "bastad",
+                                              "umag", "kitzbuhel", "bucharest")):
+                match_surface = "Clay"
+            elif any(t in _key_lower for t in ("wimbledon", "queens", "halle",
+                                                "grass", "eastbourne", "hertogenbosch")):
+                match_surface = "Grass"
+            else:
+                match_surface = "Hard"
 
             p1_snap = get_snapshot(p1_name, as_p1=True, surface=match_surface)
             p2_snap = get_snapshot(p2_name, as_p1=False, surface=match_surface)
@@ -7702,9 +7784,11 @@ def run_nhl(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
         ctx = _detect_contextual_flags(game, "nhl")
         ctx = {
             **ctx,
+            **_prediction_temporal_context(game, commence),
             **build_availability_context("nhl", game, combined),
             **build_environment_context("nhl", home_team, away_team, commence),
         }
+        ctx = _finalize_prediction_temporal_context(ctx, sport="nhl", game=game, commence=commence)
 
         x = pd.DataFrame([combined], columns=feature_cols)
         raw_p = trainer.ensemble_model.predict_proba(x)
@@ -7777,9 +7861,22 @@ def run_nhl(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
             "goalie_status": ctx.get("goalie_status"),
             "rest_advantage": int(ctx.get("rest_advantage", 0) or 0),
         }
+        nhl_value_report = None
+        try:
+            nhl_value_report = _NHL_SIDE_MODEL.build_value_report(
+                snapshot=combined,
+                odds_moneyline={"home": float(home_odds), "away": float(away_odds)},
+                goalie_context=ctx,
+                model_probabilities={"home": p_home, "away": p_away},
+                clv_status=str(ctx.get("clv_status", "pending") or "pending"),
+            ).as_dict()
+        except Exception as exc:
+            logger.debug("NHL probability/value report unavailable for %s vs %s: %s", home_team, away_team, exc)
         _other_sport_games[-1]["model_available"] = True
         _other_sport_games[-1]["model_pick"] = home_team if p_home >= p_away else away_team
         _other_sport_games[-1]["nhl_probability_debug"] = nhl_probability_debug
+        if nhl_value_report:
+            _other_sport_games[-1]["nhl_value_report"] = nhl_value_report
 
         home_med = median_odds(game, home_team)
         away_med = median_odds(game, away_team)
@@ -7806,6 +7903,8 @@ def run_nhl(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
                      **_feature_freshness_context("nhl"),
                      **ctx}
         game_info["nhl_probability_debug"] = nhl_probability_debug
+        if nhl_value_report:
+            game_info["nhl_value_report"] = nhl_value_report
 
         for bet, bk_name in [
             (build_value_bet(home_team, p_home, home_odds, fp_home,

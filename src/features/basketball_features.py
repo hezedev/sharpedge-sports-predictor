@@ -51,6 +51,15 @@ class BasketballFeatureEngineer(BaseFeatureEngineer):
         super().__init__(sport="basketball")
         self._pace_window = self._sport_cfg.get("pace_window", 10)
 
+    @staticmethod
+    def _add_columns(df: pd.DataFrame, columns: Dict[str, object]) -> pd.DataFrame:
+        """Attach derived columns in one pass to avoid pandas fragmentation."""
+        if not columns:
+            return df
+        existing = [col for col in columns if col in df.columns]
+        base = df.drop(columns=existing) if existing else df
+        return pd.concat([base, pd.DataFrame(columns, index=df.index)], axis=1)
+
     # ------------------------------------------------------------------
     # Main pipeline
     # ------------------------------------------------------------------
@@ -92,6 +101,13 @@ class BasketballFeatureEngineer(BaseFeatureEngineer):
         df = self._compute_multiwindow_rolling(df)
         df = self._compute_home_away_splits(df)
 
+        # 3c. Basketball-specific model hooks: possession-adjusted strength,
+        # Four Factors, pace/totals, player availability, and matchup context.
+        df = self._compute_possession_adjusted_features(df)
+        df = self._compute_four_factors(df)
+        df = self._compute_matchup_features(df)
+        df = self._compute_availability_features(df)
+
         # 4. Form & streaks
         df = self._compute_form_features(df)
 
@@ -102,6 +118,7 @@ class BasketballFeatureEngineer(BaseFeatureEngineer):
         df = self._compute_rest_features(df)
         df = self._compute_schedule_density(df)
         df = add_travel_features(df, sport="basketball")
+        df = self._compute_load_management_features(df)
 
         # 7. Point differential trends
         df = self._compute_margin_features(df)
@@ -119,11 +136,257 @@ class BasketballFeatureEngineer(BaseFeatureEngineer):
             "away_q1", "away_q2", "away_q3", "away_q4", "away_ot",
             "home_first_half", "home_second_half",
             "away_first_half", "away_second_half",
+            "home_half_ratio", "away_half_ratio", "went_to_ot",
         ]
         df = df.drop(columns=[c for c in leakage_cols if c in df.columns], errors="ignore")
 
         logger.info("Basketball features complete: %d rows, %d columns", *df.shape)
         return df
+
+    # ------------------------------------------------------------------
+    # Possession-adjusted strength / pace projection hooks
+    # ------------------------------------------------------------------
+
+    def _compute_possession_adjusted_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add pregame possession-adjusted team strength features.
+
+        True NBA possession data is not always present in the cached API feed.
+        When it is missing, this keeps explicit proxy columns and a warning flag
+        instead of pretending raw points per game are equivalent to efficiency.
+        """
+        possession_available = {"home_possessions", "away_possessions"}.issubset(df.columns)
+        df["possession_data_available"] = int(possession_available)
+
+        if possession_available:
+            df["home_off_rating_per_100"] = df.apply(
+                lambda r: safe_divide(r.get("home_score", 0), r.get("home_possessions", 0), 1.13) * 100,
+                axis=1,
+            )
+            df["away_off_rating_per_100"] = df.apply(
+                lambda r: safe_divide(r.get("away_score", 0), r.get("away_possessions", 0), 1.13) * 100,
+                axis=1,
+            )
+            df["home_def_rating_per_100"] = df.apply(
+                lambda r: safe_divide(r.get("away_score", 0), r.get("away_possessions", 0), 1.13) * 100,
+                axis=1,
+            )
+            df["away_def_rating_per_100"] = df.apply(
+                lambda r: safe_divide(r.get("home_score", 0), r.get("home_possessions", 0), 1.13) * 100,
+                axis=1,
+            )
+            df["team_pace"] = (df["home_possessions"].fillna(100) + df["away_possessions"].fillna(100)) / 2
+        else:
+            df["home_off_rating_per_100"] = df.get("home_ortg", pd.Series(100.0, index=df.index)).fillna(100.0)
+            df["away_off_rating_per_100"] = df.get("away_ortg", pd.Series(100.0, index=df.index)).fillna(100.0)
+            df["home_def_rating_per_100"] = df.get("home_drtg", pd.Series(100.0, index=df.index)).fillna(100.0)
+            df["away_def_rating_per_100"] = df.get("away_drtg", pd.Series(100.0, index=df.index)).fillna(100.0)
+            df["team_pace"] = df.get("expected_pace", pd.Series(220.0, index=df.index)).fillna(220.0) / 2.2
+
+        df["home_net_rating_per_100"] = df["home_off_rating_per_100"] - df["home_def_rating_per_100"]
+        df["away_net_rating_per_100"] = df["away_off_rating_per_100"] - df["away_def_rating_per_100"]
+        df["net_rating_per_100_diff"] = df["home_net_rating_per_100"] - df["away_net_rating_per_100"]
+        df["opponent_adjusted_net_rating_diff"] = (
+            df.get("srs_diff", pd.Series(0.0, index=df.index)).fillna(0.0) * 0.55
+            + df["net_rating_per_100_diff"].fillna(0.0) * 0.45
+        )
+        df["home_net_rating_split"] = (
+            df.get("home_home_wpct_20", pd.Series(0.5, index=df.index)).fillna(0.5) - 0.5
+        ) * 12.0
+        df["away_net_rating_split"] = (
+            df.get("away_away_wpct_20", pd.Series(0.5, index=df.index)).fillna(0.5) - 0.5
+        ) * 12.0
+        df["recent_net_rating_exp_decay"] = (
+            df.get("margin_diff_5", pd.Series(0.0, index=df.index)).fillna(0.0) * 0.50
+            + df.get("margin_diff_10", pd.Series(0.0, index=df.index)).fillna(0.0) * 0.30
+            + df.get("margin_diff_20", pd.Series(0.0, index=df.index)).fillna(0.0) * 0.20
+        )
+        df["expected_matchup_pace"] = (
+            df.get("home_pace", pd.Series(220.0, index=df.index)).fillna(220.0)
+            + df.get("away_pace", pd.Series(220.0, index=df.index)).fillna(220.0)
+        ) / 4.4
+        df["slow_team_pace_control_adjustment"] = -np.maximum(
+            0.0,
+            98.0 - np.minimum(
+                df.get("home_pace", pd.Series(220.0, index=df.index)).fillna(220.0) / 2.2,
+                df.get("away_pace", pd.Series(220.0, index=df.index)).fillna(220.0) / 2.2,
+            ),
+        )
+        df["possessions_projection"] = (
+            df["expected_matchup_pace"].fillna(100.0) + df["slow_team_pace_control_adjustment"].fillna(0.0)
+        ).clip(lower=88.0, upper=108.0)
+        avg_eff = (
+            df["home_off_rating_per_100"].fillna(113.0)
+            + df["away_off_rating_per_100"].fillna(113.0)
+            + df["home_def_rating_per_100"].fillna(113.0)
+            + df["away_def_rating_per_100"].fillna(113.0)
+        ) / 4.0
+        df["projected_total_from_pace_efficiency"] = (df["possessions_projection"] * avg_eff * 2.0) / 100.0
+        return df
+
+    # ------------------------------------------------------------------
+    # Four Factors / matchup hooks
+    # ------------------------------------------------------------------
+
+    def _compute_four_factors(self, df: pd.DataFrame) -> pd.DataFrame:
+        defaults = pd.Series(np.nan, index=df.index)
+
+        def _col(name: str) -> pd.Series:
+            return df[name] if name in df.columns else defaults
+
+        for side, opp in (("home", "away"), ("away", "home")):
+            fga = _col(f"{side}_fga")
+            fg3m = _col(f"{side}_fg3m")
+            fgm = _col(f"{side}_fgm")
+            tov = _col(f"{side}_tov")
+            fta = _col(f"{side}_fta")
+            orb = _col(f"{side}_orb")
+            opp_drb = _col(f"{opp}_drb")
+
+            df[f"{side}_efg_pct"] = ((fgm + (0.5 * fg3m)) / fga.replace(0, np.nan)).fillna(0.52)
+            df[f"{side}_tov_rate"] = (tov / (fga + (0.44 * fta) + tov).replace(0, np.nan)).fillna(0.13)
+            df[f"{side}_oreb_rate"] = (orb / (orb + opp_drb).replace(0, np.nan)).fillna(0.25)
+            df[f"{side}_free_throw_rate"] = (fta / fga.replace(0, np.nan)).fillna(0.24)
+
+        df["efg_pct_diff"] = df["home_efg_pct"] - df["away_efg_pct"]
+        df["tov_rate_diff"] = df["away_tov_rate"] - df["home_tov_rate"]
+        df["oreb_rate_diff"] = df["home_oreb_rate"] - df["away_oreb_rate"]
+        df["free_throw_rate_diff"] = df["home_free_throw_rate"] - df["away_free_throw_rate"]
+        df["four_factors_diff"] = (
+            (df["efg_pct_diff"] * 10.0)
+            + (df["tov_rate_diff"] * 5.0)
+            + (df["oreb_rate_diff"] * 3.0)
+            + (df["free_throw_rate_diff"] * 2.0)
+        )
+        df["defensive_four_factors_available"] = int(
+            any(c.endswith("_drb") or c.endswith("_stl") or c.endswith("_blk") for c in df.columns)
+        )
+        return df
+
+    def _compute_matchup_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        defaults = pd.Series(0.0, index=df.index)
+        missing_cols: Dict[str, object] = {}
+        for col in [
+            "home_3pa_rate", "away_3pa_rate", "home_opp_3pa_allowed", "away_opp_3pa_allowed",
+            "home_rim_frequency", "away_rim_frequency", "home_rim_protection", "away_rim_protection",
+            "home_transition_frequency", "away_transition_frequency", "home_halfcourt_efficiency",
+            "away_halfcourt_efficiency", "home_foul_rate", "away_foul_rate", "home_steal_rate",
+            "away_steal_rate",
+        ]:
+            if col not in df.columns:
+                missing_cols[col] = defaults
+        df = self._add_columns(df, missing_cols)
+
+        three_point_volume = df["home_3pa_rate"] + df["away_3pa_rate"]
+        rim_pressure_edge = (
+            df["home_rim_frequency"] - df["away_rim_protection"]
+        ) - (
+            df["away_rim_frequency"] - df["home_rim_protection"]
+        )
+        turnover_flag = (
+            (df.get("home_tov_rate", pd.Series(0.13, index=df.index)) > 0.15) & (df["away_steal_rate"] > 0.08)
+        ).astype(int) - (
+            (df.get("away_tov_rate", pd.Series(0.13, index=df.index)) > 0.15) & (df["home_steal_rate"] > 0.08)
+        ).astype(int)
+        garbage_available = int(
+            {"home_non_garbage_ortg", "away_non_garbage_ortg"}.issubset(df.columns)
+        )
+        return self._add_columns(
+            df,
+            {
+                "three_point_volume_matchup": three_point_volume,
+                "high_variance_total_3pa_flag": (three_point_volume >= 0.82).astype(int),
+                "rim_pressure_edge": rim_pressure_edge,
+                "transition_edge": df["home_transition_frequency"] - df["away_transition_frequency"],
+                "halfcourt_efficiency_edge": df["home_halfcourt_efficiency"] - df["away_halfcourt_efficiency"],
+                "foul_pressure_edge": df["away_foul_rate"] - df["home_foul_rate"],
+                "turnover_prone_vs_steal_defense_flag": turnover_flag,
+                "garbage_time_filtered_available": garbage_available,
+                "garbage_time_warning": int(garbage_available == 0),
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Player availability and load-management hooks
+    # ------------------------------------------------------------------
+
+    def _compute_availability_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        missing_cols = {}
+        for col, default in {
+            "home_star_player_missing": 0,
+            "away_star_player_missing": 0,
+            "home_expected_minutes_lost": 0.0,
+            "away_expected_minutes_lost": 0.0,
+            "home_replacement_quality_gap": 0.0,
+            "away_replacement_quality_gap": 0.0,
+            "home_top8_rotation_continuity": 1.0,
+            "away_top8_rotation_continuity": 1.0,
+            "home_questionable_count": 0,
+            "away_questionable_count": 0,
+            "home_doubtful_count": 0,
+            "away_doubtful_count": 0,
+        }.items():
+            if col not in df.columns:
+                missing_cols[col] = default
+        df = self._add_columns(df, missing_cols)
+
+        availability_delta = (
+            ((df["away_expected_minutes_lost"] - df["home_expected_minutes_lost"]) / 48.0) * 1.6
+            + ((df["away_star_player_missing"] - df["home_star_player_missing"]) * 2.2)
+            + ((df["home_top8_rotation_continuity"] - df["away_top8_rotation_continuity"]) * 2.0)
+            - (df["home_replacement_quality_gap"] - df["away_replacement_quality_gap"])
+        )
+        availability_net_rating_delta = availability_delta.clip(lower=-8.0, upper=8.0)
+        injury_adjusted_net_rating_diff = (
+            df.get("opponent_adjusted_net_rating_diff", pd.Series(0.0, index=df.index)).fillna(0.0)
+            + availability_net_rating_delta.fillna(0.0)
+        )
+        late_injury_uncertainty_flag = (
+            (df["home_questionable_count"] + df["away_questionable_count"] + df["home_doubtful_count"] + df["away_doubtful_count"]) > 0
+        ).astype(int)
+        return self._add_columns(
+            df,
+            {
+                "availability_net_rating_delta": availability_net_rating_delta,
+                "injury_adjusted_net_rating_diff": injury_adjusted_net_rating_diff,
+                "late_injury_uncertainty_flag": late_injury_uncertainty_flag,
+            },
+        )
+
+    def _compute_load_management_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        home_second = df.get("home_b2b", pd.Series(0.0, index=df.index)).fillna(0.0).astype(float)
+        away_second = df.get("away_b2b", pd.Series(0.0, index=df.index)).fillna(0.0).astype(float)
+        home_3in4 = df.get("home_3in4", pd.Series(0, index=df.index)).fillna(0).astype(int)
+        away_3in4 = df.get("away_3in4", pd.Series(0, index=df.index)).fillna(0).astype(int)
+        home_l5 = df.get("home_games_L5D", pd.Series(0, index=df.index)).fillna(0).astype(int)
+        away_l5 = df.get("away_games_L5D", pd.Series(0, index=df.index)).fillna(0).astype(int)
+        home_l7 = df.get("home_games_L7D", pd.Series(0, index=df.index)).fillna(0).astype(int)
+        away_l7 = df.get("away_games_L7D", pd.Series(0, index=df.index)).fillna(0).astype(int)
+        load_cols = {
+            "home_second_night_b2b": home_second,
+            "away_second_night_b2b": away_second,
+            "home_third_game_in_four": home_3in4,
+            "away_third_game_in_four": away_3in4,
+            "home_games_last_5": home_l5,
+            "away_games_last_5": away_l5,
+            "home_games_last_7": home_l7,
+            "away_games_last_7": away_l7,
+            "rest_load_edge": (
+                away_second - home_second
+                + (away_3in4 - home_3in4) * 0.6
+                + (away_l7 - home_l7) * 0.25
+            ),
+            "altitude_flag": df["home_team"].astype(str).str.contains("Denver", case=False, na=False).astype(int),
+            "extended_road_trip_flag": (
+                df.get("away_travel_bucket", pd.Series(0.0, index=df.index)).fillna(0.0) >= 3
+            ).astype(int),
+        }
+        if "prior_game_ot_flag" not in df.columns:
+            load_cols["prior_game_ot_flag"] = 0
+        return self._add_columns(
+            df,
+            load_cols,
+        )
 
     # ------------------------------------------------------------------
     # Scoring Features
@@ -418,11 +681,15 @@ class BasketballFeatureEngineer(BaseFeatureEngineer):
             home_records.setdefault(ht, []).append(1 if row["result"] == "home_win" else 0)
             away_records.setdefault(at, []).append(1 if row["result"] == "away_win" else 0)
 
-        df["home_home_wpct_20"] = h_home_wpct
-        df["away_away_wpct_20"] = a_away_wpct
-        df["home_season_games_played"] = sgp_home
-        df["away_season_games_played"] = sgp_away
-        return df
+        return self._add_columns(
+            df,
+            {
+                "home_home_wpct_20": h_home_wpct,
+                "away_away_wpct_20": a_away_wpct,
+                "home_season_games_played": sgp_home,
+                "away_season_games_played": sgp_away,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Form & Streaks
@@ -432,21 +699,24 @@ class BasketballFeatureEngineer(BaseFeatureEngineer):
         """Win form and current streak length."""
         w = self._form_window
 
-        df["home_win_form"] = self.compute_form(
+        home_win_form = self.compute_form(
             df, "home_team", "result", "home_win", w,
             other_team_col="away_team", other_target_result="away_win"
         )
-        df["away_win_form"] = self.compute_form(
+        away_win_form = self.compute_form(
             df, "away_team", "result", "away_win", w,
             other_team_col="home_team", other_target_result="home_win"
         )
-        df["form_diff"] = df["home_win_form"].fillna(0.5) - df["away_win_form"].fillna(0.5)
-
-        # Win streak calculation
-        df["home_streak"] = self._compute_streak(df, "home_team", "result", "home_win")
-        df["away_streak"] = self._compute_streak(df, "away_team", "result", "away_win")
-
-        return df
+        return self._add_columns(
+            df,
+            {
+                "home_win_form": home_win_form,
+                "away_win_form": away_win_form,
+                "form_diff": home_win_form.fillna(0.5) - away_win_form.fillna(0.5),
+                "home_streak": self._compute_streak(df, "home_team", "result", "home_win"),
+                "away_streak": self._compute_streak(df, "away_team", "result", "away_win"),
+            },
+        )
 
     def _compute_streak(
         self,
@@ -497,45 +767,41 @@ class BasketballFeatureEngineer(BaseFeatureEngineer):
             return df
 
         # First half / second half scoring
-        df["home_first_half"] = df["home_q1"].fillna(0) + df["home_q2"].fillna(0)
-        df["home_second_half"] = df["home_q3"].fillna(0) + df["home_q4"].fillna(0)
-        df["away_first_half"] = df["away_q1"].fillna(0) + df["away_q2"].fillna(0)
-        df["away_second_half"] = df["away_q3"].fillna(0) + df["away_q4"].fillna(0)
+        home_first_half = df["home_q1"].fillna(0) + df["home_q2"].fillna(0)
+        home_second_half = df["home_q3"].fillna(0) + df["home_q4"].fillna(0)
+        away_first_half = df["away_q1"].fillna(0) + df["away_q2"].fillna(0)
+        away_second_half = df["away_q3"].fillna(0) + df["away_q4"].fillna(0)
 
         # Q4 strength (clutch performance)
         w = self._form_window
-        df["home_q4_avg"] = self.compute_rolling_stats(
+        home_q4_avg = self.compute_rolling_stats(
             df, "home_team", "home_q4", w, "home_q4",
             other_team_col="away_team", other_value_col="away_q4"
         )
-        df["away_q4_avg"] = self.compute_rolling_stats(
+        away_q4_avg = self.compute_rolling_stats(
             df, "away_team", "away_q4", w, "away_q4",
             other_team_col="home_team", other_value_col="home_q4"
         )
 
         # Second-half surge: do they improve in 2nd half?
-        df["home_half_ratio"] = df.apply(
-            lambda r: safe_divide(
-                r.get("home_second_half", 0),
-                r.get("home_first_half", 1),
-                1.0,
-            ),
-            axis=1,
-        )
-        df["away_half_ratio"] = df.apply(
-            lambda r: safe_divide(
-                r.get("away_second_half", 0),
-                r.get("away_first_half", 1),
-                1.0,
-            ),
-            axis=1,
-        )
+        home_half_ratio = (home_second_half / home_first_half.replace(0, np.nan)).fillna(1.0)
+        away_half_ratio = (away_second_half / away_first_half.replace(0, np.nan)).fillna(1.0)
 
         # Overtime flag (indicator of close-game propensity)
+        quarter_cols: Dict[str, object] = {
+            "home_first_half": home_first_half,
+            "home_second_half": home_second_half,
+            "away_first_half": away_first_half,
+            "away_second_half": away_second_half,
+            "home_q4_avg": home_q4_avg,
+            "away_q4_avg": away_q4_avg,
+            "home_half_ratio": home_half_ratio,
+            "away_half_ratio": away_half_ratio,
+        }
         if "home_ot" in df.columns:
-            df["went_to_ot"] = (df["home_ot"].fillna(0) > 0).astype(float)
+            quarter_cols["went_to_ot"] = (df["home_ot"].fillna(0) > 0).astype(float)
 
-        return df
+        return self._add_columns(df, quarter_cols)
 
     # ------------------------------------------------------------------
     # Elo ratings (opponent-adjusted, with MOV scaling)
@@ -601,6 +867,7 @@ class BasketballFeatureEngineer(BaseFeatureEngineer):
         Uses searchsorted for O(n log n) per team.
         """
         windows = [3, 5, 7, 10]
+        schedule_cols: Dict[str, object] = {}
 
         # Build sorted date arrays per team across all appearances
         team_dates: Dict[str, np.ndarray] = {}
@@ -625,18 +892,24 @@ class BasketballFeatureEngineer(BaseFeatureEngineer):
                     lo = np.searchsorted(arr, d - delta, side="left")
                     hi = np.searchsorted(arr, d, side="left")  # excludes current game
                     counts.append(int(hi - lo))
-                df[col] = counts
+                schedule_cols[col] = counts
 
         # 3-in-4-nights: ≥2 games in last 3 days (3 games in 4 nights = 2 prior)
-        df["home_3in4"] = (df["home_games_L3D"] >= 2).astype(int)
-        df["away_3in4"] = (df["away_games_L3D"] >= 2).astype(int)
+        home_l3 = pd.Series(schedule_cols["home_games_L3D"], index=df.index)
+        away_l3 = pd.Series(schedule_cols["away_games_L3D"], index=df.index)
+        home_l7 = pd.Series(schedule_cols["home_games_L7D"], index=df.index)
+        away_l7 = pd.Series(schedule_cols["away_games_L7D"], index=df.index)
+        schedule_cols["home_3in4"] = (home_l3 >= 2).astype(int)
+        schedule_cols["away_3in4"] = (away_l3 >= 2).astype(int)
 
         # Weekly density: games per day over last 7 days
-        df["home_density_7"] = df["home_games_L7D"] / 7.0
-        df["away_density_7"] = df["away_games_L7D"] / 7.0
-        df["density_diff"] = df["home_density_7"] - df["away_density_7"]
+        home_density = home_l7 / 7.0
+        away_density = away_l7 / 7.0
+        schedule_cols["home_density_7"] = home_density
+        schedule_cols["away_density_7"] = away_density
+        schedule_cols["density_diff"] = home_density - away_density
 
-        return df
+        return self._add_columns(df, schedule_cols)
 
     # ------------------------------------------------------------------
     # Rest & Fatigue
@@ -644,23 +917,25 @@ class BasketballFeatureEngineer(BaseFeatureEngineer):
 
     def _compute_rest_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Days rest and back-to-back detection."""
-        df["home_rest_days"] = self.compute_days_rest(
+        home_rest = self.compute_days_rest(
             df, "home_team", other_team_col="away_team"
         )
-        df["away_rest_days"] = self.compute_days_rest(
+        away_rest = self.compute_days_rest(
             df, "away_team", other_team_col="home_team"
         )
-        df["rest_diff"] = df["home_rest_days"].fillna(2) - df["away_rest_days"].fillna(2)
 
-        # Back-to-back flag (rest < 1.5 days)
-        df["home_b2b"] = (df["home_rest_days"].fillna(3) <= 1.5).astype(float)
-        df["away_b2b"] = (df["away_rest_days"].fillna(3) <= 1.5).astype(float)
-
-        # 3-games-in-4-nights approximation
-        df["home_fatigue"] = self._compute_fatigue_index(df, "home_team")
-        df["away_fatigue"] = self._compute_fatigue_index(df, "away_team")
-
-        return df
+        return self._add_columns(
+            df,
+            {
+                "home_rest_days": home_rest,
+                "away_rest_days": away_rest,
+                "rest_diff": home_rest.fillna(2) - away_rest.fillna(2),
+                "home_b2b": (home_rest.fillna(3) <= 1.5).astype(float),
+                "away_b2b": (away_rest.fillna(3) <= 1.5).astype(float),
+                "home_fatigue": self._compute_fatigue_index(df, "home_team"),
+                "away_fatigue": self._compute_fatigue_index(df, "away_team"),
+            },
+        )
 
     def _compute_fatigue_index(
         self,

@@ -815,6 +815,24 @@ def test_api_update_allows_odds_api_keys(tmp_path, monkeypatch):
     assert "key1\nkey2\nkey3" in updated
 
 
+def test_api_update_allows_news_api_key(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("")
+
+    monkeypatch.setattr(webapp_app, "BASE", tmp_path)
+
+    client = webapp_app.app.test_client()
+    response = client.post("/api/apis/update", json={
+        "var": "NEWS_API_KEY",
+        "value": "news-key",
+    })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert "NEWS_API_KEY=" in env_path.read_text()
+
+
 def test_reasoning_candidates_include_review_metadata(tmp_path, monkeypatch):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     reports_dir = tmp_path / "reports"

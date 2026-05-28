@@ -51,12 +51,13 @@ SPORT_CONFIGS = {
             "result", "match_id", "date", "league_id", "league_name",
             "season", "home_team", "away_team", "home_team_id", "away_team_id",
             "home_score", "away_score", "status",
-            # Drop raw quarter SCORES (result leakage) but KEEP derived features:
-            # home_half_ratio, away_half_ratio, went_to_ot, home_q4_avg, away_q4_avg
-            # are now filled by FeatureStore at inference time — so they must be in the model.
+            # Drop raw quarter scores and current-game derived quarter fields.
+            # FeatureStore may add historical/inference versions later, but
+            # retraining must not learn from current-game half/OT outcomes.
             "home_first_half", "home_second_half", "away_first_half", "away_second_half",
             "home_q1", "home_q2", "home_q3", "home_q4",
             "away_q1", "away_q2", "away_q3", "away_q4", "home_ot", "away_ot",
+            "home_half_ratio", "away_half_ratio", "went_to_ot",
             "point_diff", "total_points", "neg_point_diff",
         ],
     },

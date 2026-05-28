@@ -1,9 +1,37 @@
+from .engine import (
+    CLVReport,
+    MarketDecision,
+    MarketEngine,
+    MarketEngineConfig,
+    MarketOutcomeInput,
+    MarketPrice,
+    calculate_clv,
+    calculate_overround,
+    convert_odds_to_decimal,
+    edge_vs_market,
+    expected_value_per_unit,
+    implied_probability,
+    remove_vig_probabilities,
+)
 from .policy import annotate_bet, filter_and_rank_bets, get_market_policy, summarize_focused_prediction_policy, summarize_market_policy
 
 __all__ = [
+    "CLVReport",
+    "MarketDecision",
+    "MarketEngine",
+    "MarketEngineConfig",
+    "MarketOutcomeInput",
+    "MarketPrice",
     "annotate_bet",
+    "calculate_clv",
+    "calculate_overround",
+    "convert_odds_to_decimal",
+    "edge_vs_market",
+    "expected_value_per_unit",
     "filter_and_rank_bets",
     "get_market_policy",
+    "implied_probability",
+    "remove_vig_probabilities",
     "summarize_focused_prediction_policy",
     "summarize_market_policy",
 ]

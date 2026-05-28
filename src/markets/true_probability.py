@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from src.markets.engine import (
+    edge_vs_market,
+    expected_value_per_unit,
+    implied_probability,
+)
+
 
 @dataclass
 class PredictionFactor:
@@ -128,13 +134,13 @@ def build_pricing_decision(
     min_edge: float = 0.0,
     lower_bound_prob: float | None = None,
 ) -> PricingDecision:
-    market_prob = 1.0 / offered_odds if offered_odds > 1.0 else 0.0
+    market_prob = implied_probability(offered_odds) if offered_odds > 1.0 else 0.0
     fair_odds = (1.0 / true_prob) if true_prob > 0 else 0.0
-    edge = (true_prob * offered_odds) - 1.0
+    edge = expected_value_per_unit(true_prob, offered_odds) if offered_odds > 1.0 else -1.0
     minimum_acceptable_odds = ((1.0 + min_edge) / true_prob) if true_prob > 0 else 0.0
     lower_prob = _clip_prob(lower_bound_prob if lower_bound_prob is not None else true_prob)
-    lower_bound_edge = (lower_prob * offered_odds) - 1.0
-    lower_bound_passed = lower_prob > fair_prob
+    lower_bound_edge = expected_value_per_unit(lower_prob, offered_odds) if offered_odds > 1.0 else -1.0
+    lower_bound_passed = edge_vs_market(lower_prob, fair_prob) > 0
     return PricingDecision(
         true_prob=round(true_prob, 4),
         market_prob=round(market_prob, 4),

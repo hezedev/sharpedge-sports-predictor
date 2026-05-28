@@ -247,16 +247,30 @@ class FeatureStore:
         rows = self._df[self._df[col] == resolved]
         return rows.tail(self._window) if len(rows) > 0 else pd.DataFrame()
 
+    def _team_history_before(self, team: str, as_home: bool, before_time: object | None = None) -> pd.DataFrame:
+        col = "home_team" if as_home else "away_team"
+        resolved = self._resolver.resolve(team)
+        rows = self._df[self._df[col] == resolved]
+        if rows.empty:
+            return pd.DataFrame()
+        if before_time is None or "date" not in rows.columns:
+            return rows.tail(self._window)
+        before = pd.to_datetime(before_time, errors="coerce", utc=True)
+        if pd.isna(before):
+            return rows.tail(self._window)
+        dates = pd.to_datetime(rows["date"], errors="coerce", utc=True)
+        return rows.loc[(dates < before).fillna(False)].tail(self._window)
+
     # ── Basketball-specific features ──────────────────────────────────────────
 
-    def _basketball_half_ratio(self, team: str, as_home: bool) -> float:
+    def _basketball_half_ratio(self, team: str, as_home: bool, before_time: object | None = None) -> float:
         """
         Estimate home_half_ratio / away_half_ratio from historical quarter data.
         half_ratio = avg(2nd_half_pts) / avg(1st_half_pts).
         Falls back to 1.0 (neutral) if quarter data unavailable.
         """
         prefix = "home" if as_home else "away"
-        hist = self._team_history(team, as_home)
+        hist = self._team_history_before(team, as_home, before_time)
         if hist.empty:
             return 1.0
 
@@ -284,13 +298,13 @@ class FeatureStore:
 
         return 1.0
 
-    def _basketball_went_to_ot(self, team: str, as_home: bool) -> float:
+    def _basketball_went_to_ot(self, team: str, as_home: bool, before_time: object | None = None) -> float:
         """
         Estimate probability this game goes to OT based on team's historical OT rate.
         Returns float (0–1) — historical fraction of games that went to OT.
         """
         prefix = "home" if as_home else "away"
-        hist = self._team_history(team, as_home)
+        hist = self._team_history_before(team, as_home, before_time)
         if hist.empty:
             return 0.08  # league average ~8% of games go to OT
 
@@ -308,10 +322,10 @@ class FeatureStore:
 
         return 0.08
 
-    def _basketball_q4_avg(self, team: str, as_home: bool) -> float:
+    def _basketball_q4_avg(self, team: str, as_home: bool, before_time: object | None = None) -> float:
         """Rolling average Q4 points from history."""
         prefix = "home" if as_home else "away"
-        hist = self._team_history(team, as_home)
+        hist = self._team_history_before(team, as_home, before_time)
         q4_col = f"{prefix}_q4"
         if not hist.empty and q4_col in hist.columns:
             valid = hist[q4_col].dropna()
@@ -322,7 +336,7 @@ class FeatureStore:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def get_basketball_extras(self, home_team: str, away_team: str) -> dict:
+    def get_basketball_extras(self, home_team: str, away_team: str, before_time: object | None = None) -> dict:
         """
         Return inference-time estimates for basketball features that are derived
         from raw quarter data (unavailable at bet time).
@@ -334,12 +348,12 @@ class FeatureStore:
             home_q4_avg, away_q4_avg
         """
         return {
-            "home_half_ratio": self._basketball_half_ratio(home_team, as_home=True),
-            "away_half_ratio": self._basketball_half_ratio(away_team, as_home=False),
-            "went_to_ot":      (self._basketball_went_to_ot(home_team, as_home=True)
-                                + self._basketball_went_to_ot(away_team, as_home=False)) / 2,
-            "home_q4_avg":     self._basketball_q4_avg(home_team, as_home=True),
-            "away_q4_avg":     self._basketball_q4_avg(away_team, as_home=False),
+            "home_half_ratio": self._basketball_half_ratio(home_team, as_home=True, before_time=before_time),
+            "away_half_ratio": self._basketball_half_ratio(away_team, as_home=False, before_time=before_time),
+            "went_to_ot":      (self._basketball_went_to_ot(home_team, as_home=True, before_time=before_time)
+                                + self._basketball_went_to_ot(away_team, as_home=False, before_time=before_time)) / 2,
+            "home_q4_avg":     self._basketball_q4_avg(home_team, as_home=True, before_time=before_time),
+            "away_q4_avg":     self._basketball_q4_avg(away_team, as_home=False, before_time=before_time),
         }
 
     def resolve_team(self, name: str) -> str:

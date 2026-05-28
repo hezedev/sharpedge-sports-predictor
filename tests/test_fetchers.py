@@ -211,16 +211,16 @@ class TestSoccerFetcher:
 
 
 class TestAPIFootballEnricher:
-    def test_api_football_prefers_rapidapi_key_for_rapidapi_host(self, monkeypatch) -> None:
+    def test_api_football_prefers_direct_api_sports_key_when_both_exist(self, monkeypatch) -> None:
         monkeypatch.setenv("API_SPORTS_KEY", "api-sports-key")
         monkeypatch.setenv("RAPIDAPI_KEY", "rapidapi-key")
 
         enricher = APIFootballEnricher(cache_expire_hours=0)
 
-        assert enricher.api_key == "rapidapi-key"
-        assert enricher.provider == "rapidapi"
-        assert enricher.base_url == "https://api-football-v1.p.rapidapi.com/v3"
-        assert enricher.headers["X-RapidAPI-Key"] == "rapidapi-key"
+        assert enricher.api_key == "api-sports-key"
+        assert enricher.provider == "api_sports"
+        assert enricher.base_url == "https://v3.football.api-sports.io"
+        assert enricher.headers["x-apisports-key"] == "api-sports-key"
 
     def test_api_football_falls_back_to_direct_api_sports_key(self, monkeypatch) -> None:
         monkeypatch.setenv("API_SPORTS_KEY", "api-sports-key")
@@ -232,6 +232,17 @@ class TestAPIFootballEnricher:
         assert enricher.provider == "api_sports"
         assert enricher.base_url == "https://v3.football.api-sports.io"
         assert enricher.headers["x-apisports-key"] == "api-sports-key"
+
+    def test_api_football_falls_back_to_rapidapi_key(self, monkeypatch) -> None:
+        monkeypatch.delenv("API_SPORTS_KEY", raising=False)
+        monkeypatch.setenv("RAPIDAPI_KEY", "rapidapi-key")
+
+        enricher = APIFootballEnricher(cache_expire_hours=0)
+
+        assert enricher.api_key == "rapidapi-key"
+        assert enricher.provider == "rapidapi"
+        assert enricher.base_url == "https://api-football-v1.p.rapidapi.com/v3"
+        assert enricher.headers["X-RapidAPI-Key"] == "rapidapi-key"
 
     def test_team_lookup_skips_network_when_temporarily_disabled(self, monkeypatch) -> None:
         enricher = APIFootballEnricher(cache_expire_hours=0)

@@ -50,6 +50,7 @@ from src.analysis.news_context import collect_matchup_news_context
 from src.analysis.schemas import AnalysisReport, AnalysisSignal, SourceNote
 from src.markets.decision_layer import classify_candidate_decision
 from src.markets.policy import annotate_bet, summarize_focused_prediction_policy, summarize_market_policy, get_market_policy
+from src.data.source_registry import source_status_summary
 from src.risk.parlay_builder import ParlayBuilder, ParlayLeg
 from src.models.artifacts import calibrator_path_for_tag, get_current_model_tag
 from src.utils.odds_quota import get_odds_budget_status, get_primary_odds_api_key, parse_odds_api_keys_from_env
@@ -3399,7 +3400,7 @@ def api_settle_all():
     backlog_mode = str(payload.get("mode", "")).lower() == "backlog"
     today_local = datetime.now(_APP_TZ).date()
     today_str = today_local.strftime("%Y-%m-%d")
-    lookback_days = 60 if backlog_mode else 21
+    lookback_days = 60 if backlog_mode else 45
     lookback_floor = (today_local - _td(days=lookback_days)).strftime("%Y-%m-%d")
     selections  = _load_my_selections()
     pending_sel = [s for s in selections if s.get("result") is None]
@@ -7660,6 +7661,7 @@ def api_apis_update():
 
     ALLOWED = {"ODDS_API_KEY", "ODDS_API_KEYS", "FOOTBALL_DATA_API_KEY", "BALLDONTLIE_API_KEY",
                "API_SPORTS_KEY", "RAPIDAPI_KEY", "OPENWEATHER_API_KEY",
+               "NEWS_API_KEY",
                "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "INITIAL_BANKROLL",
                "ANTHROPIC_API_KEY", "CLAUDE_REASONING_MODEL",
                "OPENROUTER_API_KEY", "OPENROUTER_REASONING_MODEL"}
@@ -7786,6 +7788,15 @@ def api_quota_warning():
         return jsonify({"level": quota_bridge.get_warning_level()})
     except Exception:
         return jsonify({"level": "unknown"}), 500
+
+
+@app.route("/api/sources/status")
+def api_sources_status():
+    """Return configured and missing sports data providers."""
+    try:
+        return jsonify(source_status_summary())
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/quota/sync-legacy")

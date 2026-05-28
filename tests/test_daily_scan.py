@@ -3424,7 +3424,7 @@ def test_publish_guardrails_suppress_nonfocused_lane_before_review() -> None:
             "sport": "soccer",
             "league": "Premier League",
             "league_key": "soccer_epl",
-            "market": "spreads",
+            "market": "btts",
             "team": "Team A +0.5",
             "home": "Team A",
             "away": "Team B",

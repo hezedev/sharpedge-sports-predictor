@@ -82,20 +82,26 @@ class SoccerFeatureEngineer(BaseFeatureEngineer):
         # 5. Days rest
         df = self._compute_rest_features(df)
 
-        # 6. Goal difference & xG proxy (Dixon-Coles team strength model)
+        # 6. Soccer-specific xG/form/schedule features. These use only prior
+        #    rows for each team, so they are safe for pre-match training.
+        df = self._compute_soccer_xg_features(df)
+        df = self._compute_exponential_form_features(df)
+        df = self._compute_schedule_fatigue_features(df)
+
+        # 7. Goal difference & xG proxy (Dixon-Coles team strength model)
         df = self._compute_xg_proxy(df)
         df = self._compute_dixon_coles_xg(df)
 
-        # 7. Competition encoding
+        # 8. Competition encoding
         df = self._encode_competition(df)
 
-        # 8. League table position (rolling season points proxy)
+        # 9. League table position (rolling season points proxy)
         df = self._compute_season_position(df)
 
-        # 9. Encode target
+        # 10. Encode target
         df, self.label_map = self.encode_target(df, target_col="result")
 
-        # 10. Drop only half-time columns. We intentionally keep full-time
+        # 11. Drop only half-time columns. We intentionally keep full-time
         #     goals in the feature cache so market backtests (totals/BTTS/team
         #     totals) can derive labels later. Training configs still remove
         #     them before fitting, so this does not introduce model leakage.
@@ -317,6 +323,156 @@ class SoccerFeatureEngineer(BaseFeatureEngineer):
             df, "away_team", other_team_col="home_team"
         )
         df["rest_diff"] = df["home_rest_days"].fillna(7) - df["away_rest_days"].fillna(7)
+        return df
+
+    # ------------------------------------------------------------------
+    # Soccer-specific xG, form, and schedule features
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
+        for col in candidates:
+            if col in df.columns:
+                return col
+        return None
+
+    def _compute_soccer_xg_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add rolling non-penalty xG style features when xG columns exist.
+
+        If true non-penalty xG is absent, this falls back to available xG and
+        finally to goals as a conservative proxy. The feature names keep the
+        ``np_xg`` prefix so downstream reports know this is the soccer xG lane.
+        """
+        home_xg_col = self._first_existing_column(df, ["home_np_xg", "home_npxg", "home_xg"])
+        away_xg_col = self._first_existing_column(df, ["away_np_xg", "away_npxg", "away_xg"])
+        if home_xg_col is None or away_xg_col is None:
+            home_xg_col = "home_goals"
+            away_xg_col = "away_goals"
+            df["xg_source_quality"] = 0.35
+        else:
+            df["xg_source_quality"] = 1.0 if "np" in home_xg_col.lower() else 0.75
+
+        w = max(6, int(self._form_window) * 2)
+        df["home_np_xg_for_rolling"] = self.compute_rolling_stats(
+            df, "home_team", home_xg_col, w, "home_np_xg_for",
+            other_team_col="away_team", other_value_col=away_xg_col,
+        )
+        df["away_np_xg_for_rolling"] = self.compute_rolling_stats(
+            df, "away_team", away_xg_col, w, "away_np_xg_for",
+            other_team_col="home_team", other_value_col=home_xg_col,
+        )
+        df["home_np_xg_against_rolling"] = self.compute_rolling_stats(
+            df, "home_team", away_xg_col, w, "home_np_xg_against",
+            other_team_col="away_team", other_value_col=home_xg_col,
+        )
+        df["away_np_xg_against_rolling"] = self.compute_rolling_stats(
+            df, "away_team", home_xg_col, w, "away_np_xg_against",
+            other_team_col="home_team", other_value_col=away_xg_col,
+        )
+        df["np_xg_diff"] = (
+            df["home_np_xg_for_rolling"].fillna(1.25)
+            - df["home_np_xg_against_rolling"].fillna(1.25)
+            - df["away_np_xg_for_rolling"].fillna(1.15)
+            + df["away_np_xg_against_rolling"].fillna(1.15)
+        )
+        df["home_np_xg_split"] = df["home_np_xg_for_rolling"].fillna(1.25)
+        df["away_np_xg_split"] = df["away_np_xg_for_rolling"].fillna(1.15)
+
+        # League scoring environment by competition, strictly shifted.
+        total_xg = pd.to_numeric(df[home_xg_col], errors="coerce").fillna(0) + pd.to_numeric(
+            df[away_xg_col], errors="coerce"
+        ).fillna(0)
+        if "competition" in df.columns:
+            df["_total_xg_for_env"] = total_xg
+            df["league_scoring_environment"] = (
+                df.groupby("competition")["_total_xg_for_env"]
+                .transform(lambda s: s.expanding(min_periods=8).mean().shift(1))
+                .fillna(total_xg.expanding(min_periods=8).mean().shift(1))
+            )
+            df = df.drop(columns=["_total_xg_for_env"])
+        else:
+            df["league_scoring_environment"] = total_xg.expanding(min_periods=8).mean().shift(1)
+        df["league_scoring_environment"] = df["league_scoring_environment"].fillna(2.55)
+
+        df["opponent_adjusted_xg_diff"] = df["np_xg_diff"] / df["league_scoring_environment"].replace(0, np.nan)
+        df["opponent_adjusted_xg_diff"] = df["opponent_adjusted_xg_diff"].fillna(0.0)
+        df["xg_adjusted_elo_diff"] = df["elo_diff"].fillna(0.0) + (df["opponent_adjusted_xg_diff"] * 120.0)
+        return df
+
+    def _compute_exponential_form_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Recent form with exponential decay, avoiding last-5 overreaction."""
+        half_life = max(3.0, float(self._form_window))
+        decay = 0.5 ** (1.0 / half_life)
+        home_form: list[float] = []
+        away_form: list[float] = []
+        ratings: Dict[str, float] = {}
+
+        for _, row in df.iterrows():
+            home = row["home_team"]
+            away = row["away_team"]
+            home_rating = ratings.get(home, 0.5)
+            away_rating = ratings.get(away, 0.5)
+            home_form.append(home_rating)
+            away_form.append(away_rating)
+
+            result = row.get("result")
+            if result == "home_win":
+                home_points, away_points = 1.0, 0.0
+            elif result == "away_win":
+                home_points, away_points = 0.0, 1.0
+            elif result == "draw":
+                home_points, away_points = 0.5, 0.5
+            else:
+                continue
+
+            ratings[home] = (home_rating * decay) + (home_points * (1.0 - decay))
+            ratings[away] = (away_rating * decay) + (away_points * (1.0 - decay))
+
+        df["home_exp_decay_form"] = home_form
+        df["away_exp_decay_form"] = away_form
+        df["exp_decay_form_diff"] = df["home_exp_decay_form"] - df["away_exp_decay_form"]
+        return df
+
+    def _compute_schedule_fatigue_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Fixture congestion and rotation-risk hooks using pre-match dates."""
+        windows = (7, 14, 21)
+        home_counts = {days: [] for days in windows}
+        away_counts = {days: [] for days in windows}
+        last_dates: Dict[str, list[pd.Timestamp]] = {}
+
+        for _, row in df.iterrows():
+            match_date = pd.to_datetime(row["date"])
+            home = row["home_team"]
+            away = row["away_team"]
+            for team, bucket in ((home, home_counts), (away, away_counts)):
+                history = last_dates.get(team, [])
+                for days in windows:
+                    cutoff = match_date - pd.Timedelta(days=days)
+                    bucket[days].append(sum(1 for d in history if d >= cutoff))
+            last_dates.setdefault(home, []).append(match_date)
+            last_dates.setdefault(away, []).append(match_date)
+
+        for days in windows:
+            df[f"home_matches_last_{days}d"] = home_counts[days]
+            df[f"away_matches_last_{days}d"] = away_counts[days]
+            df[f"matches_last_{days}d_diff"] = df[f"home_matches_last_{days}d"] - df[f"away_matches_last_{days}d"]
+
+        competition = df.get("competition", pd.Series("", index=df.index)).astype(str).str.lower()
+        round_name = df.get("round", pd.Series("", index=df.index)).astype(str).str.lower()
+        df["european_midweek_flag"] = competition.str.contains(
+            "champions|europa|conference|uefa", regex=True, na=False
+        ).astype(float)
+        df["domestic_cup_rotation_risk"] = (
+            competition.str.contains("cup|pokal|copa|coupe|fa cup|efl", regex=True, na=False)
+            | round_name.str.contains("cup|semi|quarter|round", regex=True, na=False)
+        ).astype(float)
+        home_rest = df["home_rest_days"] if "home_rest_days" in df.columns else pd.Series(7, index=df.index)
+        away_rest = df["away_rest_days"] if "away_rest_days" in df.columns else pd.Series(7, index=df.index)
+        df["international_break_return_flag"] = (
+            home_rest.fillna(7).between(10, 21)
+            | away_rest.fillna(7).between(10, 21)
+        ).astype(float)
         return df
 
     # ------------------------------------------------------------------

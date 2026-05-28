@@ -83,9 +83,12 @@ class NHLFeatureEngineer(BaseFeatureEngineer):
 
         df = self._add_rolling_features(df)
         df = self._add_shot_features(df)
+        df = self._add_5v5_strength_features(df)
+        df = self._add_goalie_features(df)
         df = self._add_elo_features(df)
         df = self._add_rest_features(df)
         df = self._add_schedule_density(df)
+        df = self._add_nhl_schedule_context(df)
         df = self._add_streak(df)
         df = self._add_home_away_splits(df)
         df = add_travel_features(df, sport="nhl")
@@ -233,6 +236,119 @@ class NHLFeatureEngineer(BaseFeatureEngineer):
         logger.info("NHL shot features added (%.0f%% of games have PBP data)", has_data)
         return df
 
+    def _add_5v5_strength_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add NHL skater-strength hooks with 5v5 xG as the preferred signal.
+
+        Current historical caches expose play-by-play xG/Corsi/Fenwick, but may
+        not distinguish every public analytics concept yet. These features use
+        available xG first and Corsi/Fenwick as fallback, while preserving names
+        that make the model contract explicit.
+        """
+        for w in _ROLL_WINDOWS:
+            home_xgf = df.get(f"home_xgf_pg_{w}", pd.Series(np.nan, index=df.index))
+            away_xgf = df.get(f"away_xgf_pg_{w}", pd.Series(np.nan, index=df.index))
+            home_xga = df.get(f"home_xga_pg_{w}", pd.Series(np.nan, index=df.index))
+            away_xga = df.get(f"away_xga_pg_{w}", pd.Series(np.nan, index=df.index))
+            home_cf = df.get(f"home_cf_pct_{w}", pd.Series(0.5, index=df.index)).fillna(0.5)
+            away_cf = df.get(f"away_cf_pct_{w}", pd.Series(0.5, index=df.index)).fillna(0.5)
+            home_ff = df.get(f"home_ff_pct_{w}", pd.Series(0.5, index=df.index)).fillna(0.5)
+            away_ff = df.get(f"away_ff_pct_{w}", pd.Series(0.5, index=df.index)).fillna(0.5)
+
+            # xG preferred; Corsi/Fenwick are fallback possession-volume proxies.
+            df[f"home_5v5_xgf_pg_{w}"] = home_xgf.fillna(2.75 + ((home_cf - 0.5) * 2.2))
+            df[f"away_5v5_xgf_pg_{w}"] = away_xgf.fillna(2.65 + ((away_cf - 0.5) * 2.2))
+            df[f"home_5v5_xga_pg_{w}"] = home_xga.fillna(2.65 - ((home_cf - 0.5) * 2.0))
+            df[f"away_5v5_xga_pg_{w}"] = away_xga.fillna(2.75 - ((away_cf - 0.5) * 2.0))
+            df[f"home_5v5_xg_share_{w}"] = df[f"home_5v5_xgf_pg_{w}"] / (
+                df[f"home_5v5_xgf_pg_{w}"] + df[f"home_5v5_xga_pg_{w}"]
+            ).replace(0, np.nan)
+            df[f"away_5v5_xg_share_{w}"] = df[f"away_5v5_xgf_pg_{w}"] / (
+                df[f"away_5v5_xgf_pg_{w}"] + df[f"away_5v5_xga_pg_{w}"]
+            ).replace(0, np.nan)
+            df[f"home_score_adjusted_attempt_share_{w}"] = ((home_cf * 0.65) + (home_ff * 0.35)).clip(0.25, 0.75)
+            df[f"away_score_adjusted_attempt_share_{w}"] = ((away_cf * 0.65) + (away_ff * 0.35)).clip(0.25, 0.75)
+            df[f"home_venue_adjusted_xg_{w}"] = df[f"home_5v5_xgf_pg_{w}"] * 1.015
+            df[f"away_venue_adjusted_xg_{w}"] = df[f"away_5v5_xgf_pg_{w}"] * 0.985
+
+        # Optional analytics hooks. If source data exists, preserve it; otherwise
+        # use neutral zeros so downstream code can depend on stable columns.
+        optional_pairs = {
+            "high_danger_chances": ("home_high_danger_chances", "away_high_danger_chances"),
+            "rush_chances": ("home_rush_chances", "away_rush_chances"),
+            "rebound_chances": ("home_rebound_chances", "away_rebound_chances"),
+            "flurry_adjusted_xg": ("home_flurry_adjusted_xg", "away_flurry_adjusted_xg"),
+        }
+        for _, (home_col, away_col) in optional_pairs.items():
+            if home_col not in df.columns:
+                df[home_col] = 0.0
+            if away_col not in df.columns:
+                df[away_col] = 0.0
+        return df
+
+    def _add_goalie_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        First-class starting-goalie feature hooks.
+
+        These columns are neutral unless a live or historical availability source
+        has populated goalie fields. GSAx is preferred; save percentage is carried
+        only as a secondary signal.
+        """
+        defaults = {
+            "home_goalie_confirmed": 0,
+            "away_goalie_confirmed": 0,
+            "home_goalie_gsax": 0.0,
+            "away_goalie_gsax": 0.0,
+            "home_goalie_recent_gsax": 0.0,
+            "away_goalie_recent_gsax": 0.0,
+            "home_goalie_gsax_long_term": 0.0,
+            "away_goalie_gsax_long_term": 0.0,
+            "home_goalie_save_pct": 0.910,
+            "away_goalie_save_pct": 0.910,
+            "home_backup_goalie_flag": 0,
+            "away_backup_goalie_flag": 0,
+            "home_goalie_quality_gap": 0.0,
+            "away_goalie_quality_gap": 0.0,
+        }
+        for col, default in defaults.items():
+            if col not in df.columns:
+                df[col] = default
+
+        # Rest/consecutive starts are best-effort if named starter columns exist.
+        for side in ("home", "away"):
+            goalie_col = f"{side}_goalie_name"
+            team_col = f"{side}_team"
+            rest_col = f"{side}_goalie_rest_days"
+            starts_col = f"{side}_goalie_consecutive_starts"
+            if goalie_col not in df.columns:
+                df[rest_col] = 7
+                df[starts_col] = 0
+                continue
+            rest: list[int] = []
+            starts: list[int] = []
+            last_seen: Dict[str, pd.Timestamp] = {}
+            streaks: Dict[str, int] = {}
+            for _, row in df.iterrows():
+                goalie = str(row.get(goalie_col, "") or "").strip()
+                match_date = pd.to_datetime(row["date"])
+                if not goalie:
+                    rest.append(7)
+                    starts.append(0)
+                    continue
+                previous = last_seen.get(goalie)
+                rest.append(7 if previous is None else min((match_date - previous).days, 14))
+                starts.append(streaks.get(goalie, 0))
+                last_seen[goalie] = match_date
+                streaks[goalie] = streaks.get(goalie, 0) + 1
+            df[rest_col] = rest
+            df[starts_col] = starts
+            df[f"{side}_goalie_b2b"] = (df[rest_col] <= 1).astype(int)
+
+        df["goalie_gsax_gap"] = df["home_goalie_gsax"].fillna(0) - df["away_goalie_gsax"].fillna(0)
+        df["goalie_long_term_gap"] = df["home_goalie_gsax_long_term"].fillna(0) - df["away_goalie_gsax_long_term"].fillna(0)
+        df["goalie_save_pct_gap_secondary"] = df["home_goalie_save_pct"].fillna(0.910) - df["away_goalie_save_pct"].fillna(0.910)
+        return df
+
     # ------------------------------------------------------------------
     # Elo ratings
     # ------------------------------------------------------------------
@@ -332,6 +448,24 @@ class NHLFeatureEngineer(BaseFeatureEngineer):
         extras["away_density_7"] = extras["away_games_L7D"] / 7.0
         extras["density_diff"] = extras["home_density_7"] - extras["away_density_7"]
         return pd.concat([df, extras], axis=1)
+
+    def _add_nhl_schedule_context(self, df: pd.DataFrame) -> pd.DataFrame:
+        """NHL-specific rest/travel hooks beyond generic density."""
+        if "home_games_L3D" not in df.columns or "away_games_L3D" not in df.columns:
+            return df
+        df["home_second_in_two_nights"] = df["home_b2b"]
+        df["away_second_in_two_nights"] = df["away_b2b"]
+        df["home_three_in_four"] = (df["home_games_L5D"] >= 3).astype(int)
+        df["away_three_in_four"] = (df["away_games_L5D"] >= 3).astype(int)
+        df["home_rest_advantage"] = df["home_rest_days"].fillna(3) - df["away_rest_days"].fillna(3)
+        df["goalie_rotation_likelihood_b2b"] = (
+            (df["home_b2b"].fillna(0) + df["away_b2b"].fillna(0)) > 0
+        ).astype(int)
+        if "home_prior_game_ot" not in df.columns:
+            df["home_prior_game_ot"] = 0
+        if "away_prior_game_ot" not in df.columns:
+            df["away_prior_game_ot"] = 0
+        return df
 
     # ------------------------------------------------------------------
     # Rest / fatigue

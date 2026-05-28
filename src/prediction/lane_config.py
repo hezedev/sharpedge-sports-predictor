@@ -138,6 +138,22 @@ _DEFAULT_FOCUSED_LANES: dict[str, dict[str, dict[str, Any]]] = {
                 "home_away_form",
             ],
         },
+        "spreads": {
+            "status": "controlled",
+            "label": "Controlled Focus",
+            "focus_allowed": True,
+            "parlay_allowed": False,
+            "quality_floor": 82,
+            "reason": "Controlled soccer handicap lane: positive handicap and spread-style markets are allowed when team-news, motivation, and draw-risk context are handled.",
+            "requires": [
+                "fixture_verified",
+                "fresh_odds",
+                "team_news",
+                "motivation",
+                "rotation_or_congestion",
+                "home_away_form",
+            ],
+        },
     },
 }
 
