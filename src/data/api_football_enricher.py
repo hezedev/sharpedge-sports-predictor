@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 _TEAM_STOPWORDS = {
     "fc", "cf", "ac", "sc", "afc", "cfc", "club", "de", "atletico", "athletic",
 }
+_LOW_QUOTA_WARNED_PROVIDERS: set[str] = set()
+_FAILOVER_WARNED_ROUTES: set[str] = set()
 
 
 class APIFootballEnricher:
@@ -52,26 +54,31 @@ class APIFootballEnricher:
     def __init__(self, cache_expire_hours: int = 24) -> None:
         rapidapi_key = os.environ.get("RAPIDAPI_KEY", "")
         api_sports_key = os.environ.get("API_SPORTS_KEY", "")
+        self._provider_configs = {
+            "api_sports": {
+                "api_key": api_sports_key,
+                "base_url": "https://v3.football.api-sports.io",
+                "headers": {"x-apisports-key": api_sports_key},
+            },
+            "rapidapi": {
+                "api_key": rapidapi_key,
+                "base_url": "https://api-football-v1.p.rapidapi.com/v3",
+                "headers": {
+                    "X-RapidAPI-Key": rapidapi_key,
+                    "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
+                },
+            },
+        }
         # Prefer the direct API-Sports dashboard key when present. It avoids
         # RapidAPI host/account mismatches that can surface as 403s even when a
         # valid direct API-Football key is configured.
-        self.api_key = api_sports_key or rapidapi_key
         self.provider = "api_sports" if api_sports_key else "rapidapi"
-        self.base_url = (
-            "https://v3.football.api-sports.io"
-            if api_sports_key
-            else "https://api-football-v1.p.rapidapi.com/v3"
-        )
+        self.api_key = ""
+        self.base_url = ""
+        self.headers: Dict[str, str] = {}
+        self._unavailable_providers: set[str] = set()
+        self._activate_provider(self.provider)
         self.cache_expire_hours = cache_expire_hours
-
-        self.headers = (
-            {
-                "X-RapidAPI-Key": self.api_key,
-                "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
-            }
-            if self.provider == "rapidapi"
-            else {"x-apisports-key": self.api_key}
-        )
 
         # Rate limiter: 100 req/day free tier
         self._rate_limiter = RateLimiter(max_calls=100, period_seconds=86400)
@@ -95,6 +102,55 @@ class APIFootballEnricher:
             self._disabled_reason = ""
             return False
         return True
+
+    def _provider_key(self) -> str:
+        return "api_sports_football" if self.provider == "api_sports" else "rapidapi_football"
+
+    def _activate_provider(self, provider: str) -> bool:
+        config = self._provider_configs.get(provider) or {}
+        api_key = str(config.get("api_key") or "").strip()
+        if not api_key:
+            return False
+        self.provider = provider
+        self.api_key = api_key
+        self.base_url = str(config.get("base_url") or "")
+        self.headers = dict(config.get("headers") or {})
+        return True
+
+    def _activate_healthy_fallback(self, *, reason: str) -> bool:
+        current = self.provider
+        fallback = "rapidapi" if current == "api_sports" else "api_sports"
+        if fallback in self._unavailable_providers:
+            return False
+        config = self._provider_configs.get(fallback) or {}
+        if not str(config.get("api_key") or "").strip():
+            return False
+        fallback_key = "api_sports_football" if fallback == "api_sports" else "rapidapi_football"
+        if provider_quota_low(fallback_key):
+            return False
+        if not self._activate_provider(fallback):
+            return False
+        route = f"{current}->{fallback}"
+        if route not in _FAILOVER_WARNED_ROUTES:
+            _FAILOVER_WARNED_ROUTES.add(route)
+            logger.warning("API-Football switched %s (%s)", route, reason)
+        return True
+
+    def _live_requests_available(self) -> bool:
+        """Return whether live enrichment calls should be attempted."""
+        if not self.api_key or self._is_temporarily_disabled():
+            return False
+        provider_key = self._provider_key()
+        if not provider_quota_low(provider_key):
+            return True
+        self._unavailable_providers.add(self.provider)
+        if self._activate_healthy_fallback(reason=f"{provider_key} quota is low"):
+            return True
+        self._disabled_reason = f"{provider_key} quota is low; live enrichment paused until quota recovers"
+        if provider_key not in _LOW_QUOTA_WARNED_PROVIDERS:
+            _LOW_QUOTA_WARNED_PROVIDERS.add(provider_key)
+            logger.warning(self._disabled_reason)
+        return False
 
     def enrich_soccer_odds(
         self,
@@ -172,6 +228,8 @@ class APIFootballEnricher:
         """
         enrichment = {}
         fields = fields or ["form", "xg", "corners", "h2h"]
+        if not self._live_requests_available():
+            return enrichment
 
         try:
             # Get fixture ID first
@@ -214,6 +272,8 @@ class APIFootballEnricher:
         """
         if not self.api_key:
             return {}
+        if not self._live_requests_available():
+            return {}
 
         try:
             fixture = self._find_fixture(home_team, away_team, commence)
@@ -232,19 +292,21 @@ class APIFootballEnricher:
             return {}
 
     def _get_json(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        if self._is_temporarily_disabled():
+        if not self._live_requests_available():
             raise RuntimeError(self._disabled_reason or "API-Football enrichment temporarily paused")
-        provider_key = "api_sports_football" if self.provider == "api_sports" else "rapidapi_football"
-        if provider_quota_low(provider_key):
-            raise RuntimeError(f"{provider_key} quota is low; skipping live enrichment")
+        provider_key = self._provider_key()
         url = f"{self.base_url}/{path.lstrip('/')}"
         resp = self._cache.get(url, headers=self.headers, params=params or {}, timeout=10)
         if not getattr(resp, "from_cache", False):
             record_provider_response(provider_key, resp)
-        if resp.status_code == 403:
-            self._temporarily_disable(hours=6, reason="403 Forbidden from API-Football")
-        elif resp.status_code == 429:
-            self._temporarily_disable(hours=2, reason="429 Too Many Requests from API-Football")
+        if resp.status_code in {403, 429}:
+            failed_provider = self.provider
+            self._unavailable_providers.add(failed_provider)
+            reason = f"{resp.status_code} from {provider_key}"
+            if self._activate_healthy_fallback(reason=reason):
+                return self._get_json(path, params=params)
+            hours = 6 if resp.status_code == 403 else 2
+            self._temporarily_disable(hours=hours, reason=f"{reason}; no healthy configured fallback")
         resp.raise_for_status()
         return resp.json()
 
@@ -258,7 +320,7 @@ class APIFootballEnricher:
         Return the matching fixture payload, not just the fixture id.
         """
         try:
-            if self._is_temporarily_disabled():
+            if not self._live_requests_available():
                 return None
             if not self._rate_limiter.allow_request():
                 logger.warning("API-Football rate limit reached")
@@ -672,7 +734,7 @@ class APIFootballEnricher:
     def _get_team_id(self, team_name: str) -> Optional[int]:
         """Get team ID by name."""
         try:
-            if not self.api_key or self._is_temporarily_disabled():
+            if not self._live_requests_available():
                 return None
             if not self._rate_limiter.allow_request():
                 return None

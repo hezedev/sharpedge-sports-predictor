@@ -17,6 +17,7 @@ from src.data.basketball_fetcher import BasketballFetcher
 from src.data.tennis_fetcher import TennisFetcher
 from src.data.odds_fetcher import OddsFetcher
 from src.data.api_football_enricher import APIFootballEnricher
+import src.data.api_football_enricher as api_football_module
 
 
 # ------------------------------------------------------------------
@@ -259,6 +260,79 @@ class TestAPIFootballEnricher:
 
         assert enricher._get_team_id("Bayern Munich") is None
         assert called["count"] == 0
+
+    def test_low_quota_pauses_live_requests_without_repeated_errors(self, monkeypatch, caplog) -> None:
+        monkeypatch.setenv("API_SPORTS_KEY", "api-sports-key")
+        monkeypatch.delenv("RAPIDAPI_KEY", raising=False)
+        monkeypatch.setattr(api_football_module, "provider_quota_low", lambda provider: True)
+        api_football_module._LOW_QUOTA_WARNED_PROVIDERS.clear()
+        first = APIFootballEnricher(cache_expire_hours=0)
+        second = APIFootballEnricher(cache_expire_hours=0)
+        called = {"count": 0}
+
+        def _should_not_call(*args, **kwargs):
+            called["count"] += 1
+            raise AssertionError("low-quota provider should not hit the network")
+
+        monkeypatch.setattr(first._cache, "get", _should_not_call)
+        monkeypatch.setattr(second._cache, "get", _should_not_call)
+
+        with caplog.at_level("WARNING"):
+            assert first._get_team_id("Bayern Munich") is None
+            assert second._find_fixture("Bayern Munich", "Dortmund") is None
+
+        assert called["count"] == 0
+        assert first._disabled_reason.startswith("api_sports_football quota is low")
+        assert sum("quota is low; live enrichment paused" in record.message for record in caplog.records) == 1
+
+    def test_low_direct_quota_switches_to_healthy_rapidapi_fallback(self, monkeypatch) -> None:
+        monkeypatch.setenv("API_SPORTS_KEY", "api-sports-key")
+        monkeypatch.setenv("RAPIDAPI_KEY", "rapidapi-key")
+        monkeypatch.setattr(
+            api_football_module,
+            "provider_quota_low",
+            lambda provider: provider == "api_sports_football",
+        )
+
+        enricher = APIFootballEnricher(cache_expire_hours=0)
+
+        assert enricher._live_requests_available() is True
+        assert enricher.provider == "rapidapi"
+        assert enricher.headers["X-RapidAPI-Key"] == "rapidapi-key"
+
+    def test_403_retries_once_through_healthy_configured_fallback(self, monkeypatch) -> None:
+        monkeypatch.setenv("API_SPORTS_KEY", "api-sports-key")
+        monkeypatch.setenv("RAPIDAPI_KEY", "rapidapi-key")
+        monkeypatch.setattr(api_football_module, "provider_quota_low", lambda provider: False)
+        monkeypatch.setattr(api_football_module, "record_provider_response", lambda *args, **kwargs: None)
+        enricher = APIFootballEnricher(cache_expire_hours=0)
+        calls: list[str] = []
+
+        class _Response:
+            from_cache = False
+            headers = {}
+
+            def __init__(self, status_code: int) -> None:
+                self.status_code = status_code
+
+            def raise_for_status(self) -> None:
+                if self.status_code >= 400:
+                    raise RuntimeError(str(self.status_code))
+
+            def json(self) -> dict:
+                return {"response": [{"id": 1}]}
+
+        def _get(url, **kwargs):
+            calls.append(url)
+            return _Response(403 if "v3.football.api-sports.io" in url else 200)
+
+        monkeypatch.setattr(enricher._cache, "get", _get)
+
+        payload = enricher._get_json("teams", params={"name": "Bayern Munich"})
+
+        assert payload["response"] == [{"id": 1}]
+        assert enricher.provider == "rapidapi"
+        assert len(calls) == 2
 
     def test_candidate_fixture_lookup_stops_after_provider_pause(self, monkeypatch) -> None:
         enricher = APIFootballEnricher(cache_expire_hours=0)

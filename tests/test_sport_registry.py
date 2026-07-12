@@ -25,6 +25,25 @@ def test_mls_remains_review_only_until_its_coverage_is_promoted() -> None:
     assert profile.launch_label == "Review"
 
 
+def test_world_cup_is_scanable_but_review_only() -> None:
+    profile = get_capability_profile(sport="soccer", sport_key="soccer_fifa_world_cup")
+    assert profile.scanable is True
+    assert profile.model_backed is False
+    assert profile.publishable is False
+    assert profile.review_only is True
+    assert profile.reasoning_supported is True
+    assert profile.launch_label == "Review"
+
+
+def test_discovered_soccer_league_is_review_only_not_generic_production() -> None:
+    profile = get_capability_profile(sport="soccer", sport_key="soccer_chile_campeonato")
+    assert profile.scanable is True
+    assert profile.model_backed is False
+    assert profile.publishable is False
+    assert profile.review_only is True
+    assert profile.launch_label == "Review"
+
+
 def test_wta_is_model_backed_and_now_publishable() -> None:
     profile = get_capability_profile(sport="tennis_wta")
     assert profile.model_backed is True

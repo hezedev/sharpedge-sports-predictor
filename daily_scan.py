@@ -118,6 +118,8 @@ from src.utils.odds_quota import (
 )
 from src.utils.sport_registry import (
     SOCCER_ODDS_TO_COMPETITION,
+    SOCCER_COMPETITION_CAPABILITIES,
+    SOCCER_LEAGUE_SHORTHAND_ALIASES,
     enrich_with_capability,
     get_capability_profile,
     soccer_pretty_label,
@@ -151,6 +153,7 @@ def _build_version_snapshot(*, args: argparse.Namespace) -> dict:
         "scan_config": {
             "sport": args.sport,
             "market": args.market,
+            "soccer_leagues": list(getattr(args, "soccer_leagues", []) or []),
             "dry_run": bool(args.dry_run),
             "offline_odds": bool(args.offline_odds),
             "lean_context": bool(args.lean_context),
@@ -212,10 +215,12 @@ PARLAYS_ENABLED = False
 
 _odds_remaining: int = 9999         # updated after each live request
 _odds_cache: dict = {}              # {sport_key: (fetched_at, data)}  ← in-memory cache
+_force_fresh_live_fetch_sports: set[str] = set()
 _OFFLINE_ODDS_ONLY = os.environ.get("ODDS_OFFLINE_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
 _FORCE_FRESH_ODDS = False
 _LEAN_CONTEXT_ONLY = os.environ.get("SCAN_LEAN_CONTEXT", "").strip().lower() in {"1", "true", "yes", "on"}
 _FOCUSED_SCAN_ONLY = os.environ.get("SCAN_FOCUSED_LANES", "").strip().lower() in {"1", "true", "yes", "on"}
+_SOCCER_LEAGUE_SCOPE: list[str] = []
 _scan_runtime_notes: List[dict] = []
 
 # ── API Throttle ──────────────────────────────────────────────────────────────
@@ -923,12 +928,13 @@ def _odds_key_pool_inventory() -> dict[str, Any]:
         updated_at = str(raw.get("updated_at") or "")
         metadata_age_hours = _pool_metadata_age_hours(updated_at)
         metadata_stale = metadata_age_hours is not None and metadata_age_hours > _ODDS_KEY_METADATA_STALE_HOURS
+        quota_exhausted = known_remaining is not None and known_remaining <= _ODDS_BUDGET_STOP
         rows.append({
             "key": runtime_key or "",
             "fingerprint": fp,
             "tracked": fp in tracked_rows,
             "runtime_available": runtime_key is not None,
-            "usable": runtime_key is not None and not _odds_key_quarantine_active(raw),
+            "usable": runtime_key is not None and not _odds_key_quarantine_active(raw) and not quota_exhausted,
             "remaining": known_remaining,
             "choice_remaining": known_remaining if known_remaining is not None else 500,
             "updated_at": updated_at,
@@ -936,6 +942,7 @@ def _odds_key_pool_inventory() -> dict[str, Any]:
             "metadata_stale": metadata_stale,
             "env_index": runtime_fingerprints.index(fp) if fp in runtime_fingerprints else 9999,
             "is_low": known_remaining is not None and known_remaining < _ODDS_KEY_LOW_REMAINING_THRESHOLD,
+            "quota_exhausted": quota_exhausted,
             "auth_quarantined_until": str(raw.get("auth_quarantined_until") or ""),
             "auth_quarantine_reason": str(raw.get("auth_quarantine_reason") or ""),
             "auth_quarantined": _odds_key_quarantine_active(raw),
@@ -1024,6 +1031,11 @@ def _choose_odds_api_key(
     tracked_unavailable = [row["fingerprint"] for row in rows if row["tracked"] and not row["runtime_available"]]
     usable_rows = [row for row in rows if row["usable"]]
     for row in rows:
+        if bool(row.get("quota_exhausted")) and bool(row.get("runtime_available")):
+            excluded.append({
+                "fingerprint": row["fingerprint"],
+                "reason": "quota_exhausted",
+            })
         if bool(row.get("auth_quarantined")) and bool(row.get("runtime_available")):
             excluded.append({
                 "fingerprint": row["fingerprint"],
@@ -1359,6 +1371,29 @@ def _pretty_soccer_league_name(sport_key: str) -> str:
     return soccer_pretty_label(sport_key)
 
 
+def _normalize_soccer_league_scope(values: Optional[List[str]]) -> List[str]:
+    """Normalize CLI/UI soccer league scopes to configured Odds API sport keys."""
+    if not values:
+        return []
+
+    aliases = SOCCER_LEAGUE_SHORTHAND_ALIASES
+    known = set(SOCCER_COMPETITION_CAPABILITIES.keys())
+    normalized: List[str] = []
+    for raw_value in values:
+        for raw_part in str(raw_value or "").split(","):
+            part = raw_part.strip().lower()
+            if not part:
+                continue
+            key = aliases.get(part, part)
+            if key in known and key not in normalized:
+                normalized.append(key)
+            elif key.startswith("soccer_") and key not in normalized:
+                normalized.append(key)
+            else:
+                logger.warning("Ignoring unknown soccer league scope: %s", raw_part)
+    return normalized
+
+
 def _recent_cache_event_state(sport_key: str, max_age_hours: float = 12.0) -> str:
     """
     Return a lightweight view of recent disk-cache usefulness for a league.
@@ -1390,15 +1425,19 @@ def _recent_cache_event_state(sport_key: str, max_age_hours: float = 12.0) -> st
 
 def _select_soccer_live_scope(active_soccer_keys: List[str]) -> tuple[List[str], List[str]]:
     """
-    Prefer production leagues and review-only leagues with evidence of activity.
+    Return the soccer leagues/cups to fetch from the active Odds API feed.
 
-    This keeps the scan fast on healthy days without completely losing review
-    coverage. When quota is abundant we still include the full review-only set.
+    Default behavior is broad coverage: fetch every active match market the
+    provider exposes, then let model coverage/evidence guardrails decide
+    whether each game is publishable. Set SCAN_CONSERVE_SOCCER_SCOPE=1 to
+    re-enable quota-saving deferrals for review-only leagues.
     """
     if not active_soccer_keys:
         return [], []
 
-    if os.getenv("SCAN_FULL_SOCCER_SCOPE", "").strip().lower() in {"1", "true", "yes", "on"}:
+    conserve_scope = os.getenv("SCAN_CONSERVE_SOCCER_SCOPE", "").strip().lower() in {"1", "true", "yes", "on"}
+    full_scope = os.getenv("SCAN_FULL_SOCCER_SCOPE", "").strip().lower() in {"1", "true", "yes", "on"}
+    if full_scope or not conserve_scope:
         return list(active_soccer_keys), []
 
     budget = get_odds_budget_status(ODDS_KEY, monthly_limit=500, reserve=_ODDS_BUDGET_STOP)
@@ -1442,6 +1481,24 @@ def _select_soccer_live_scope(active_soccer_keys: List[str]) -> tuple[List[str],
         review_deferred = review_recent_empty + review_other
 
     return selected, review_deferred
+
+
+def _active_soccer_match_keys(active_sports: set[str]) -> tuple[list[str], list[str], list[str]]:
+    """Return active soccer match-market keys, skipped futures, and discovered review-only keys."""
+    excluded_soccer = {
+        "soccer_fifa_world_cup_winner",
+    }
+    active_soccer_keys = sorted(
+        k for k in active_sports
+        if str(k).startswith("soccer_") and not str(k).endswith("_winner") and k not in excluded_soccer
+    )
+    skipped_leagues = sorted(
+        k for k in active_sports
+        if str(k).startswith("soccer_") and (str(k).endswith("_winner") or k in excluded_soccer)
+    )
+    configured_soccer_keys = set(soccer_scanable_keys())
+    discovered_soccer_keys = sorted(k for k in active_soccer_keys if k not in configured_soccer_keys)
+    return active_soccer_keys, skipped_leagues, discovered_soccer_keys
 
 
 def _bucket_no_candidate_reason(game: dict[str, Any]) -> str:
@@ -1794,6 +1851,8 @@ def _fetch_odds_raw(sport_key: str) -> List[dict]:
 
     # Also warm the in-memory cache
     _odds_cache[sport_key] = (datetime.now(), filtered)
+    if _FORCE_FRESH_ODDS:
+        _force_fresh_live_fetch_sports.add(sport_key)
     return filtered
 
 
@@ -1836,7 +1895,7 @@ def fetch_odds(sport_key: str, markets: str = "h2h", priority: str = "high") -> 
     # earlier in this same scan process. "Force fresh" should bypass stale
     # disk/history, not re-burn the API 2-3 times for h2h/totals/spreads on
     # the exact same sport within the same run.
-    if not _FORCE_FRESH_ODDS and sport_key in _odds_cache:
+    if (not _FORCE_FRESH_ODDS or sport_key in _force_fresh_live_fetch_sports) and sport_key in _odds_cache:
         fetched_at, cached_data = _odds_cache[sport_key]
         age_minutes = (datetime.now() - fetched_at).total_seconds() / 60
         if age_minutes < _ODDS_CACHE_TTL_MINUTES:
@@ -1936,7 +1995,35 @@ def fetch_odds(sport_key: str, markets: str = "h2h", priority: str = "high") -> 
             return _filter_market(tagged_data)
         return []
 
-    return _fetch_odds_raw(sport_key)
+    try:
+        return _fetch_odds_raw(sport_key)
+    except Exception as exc:
+        disk_data, disk_meta = _load_disk_cache_bundle(sport_key)
+        if disk_data is not None:
+            logger.warning(
+                "Odds [%s/%s]: live fetch failed (%s) — using saved odds fallback",
+                sport_key,
+                markets,
+                exc,
+            )
+            _odds_cache[sport_key] = (datetime.now(), disk_data)
+            tagged_data = _tag_odds_payload(
+                disk_data,
+                source_status="stale_fallback",
+                cache_loaded_at=disk_meta.get("cache_loaded_at"),
+                cache_age_hours=disk_meta.get("cache_age_hours"),
+                cache_used=True,
+                fallback_used=True,
+                snapshot_age_hours=_disk_cache_age_hours(sport_key),
+                source_reason=(
+                    "force_fresh_requested_but_live_fetch_failed"
+                    if _FORCE_FRESH_ODDS
+                    else "live_fetch_failed_saved_odds_fallback"
+                ),
+            )
+            return _filter_market(tagged_data)
+        logger.warning("Odds [%s/%s]: live fetch failed and no saved odds fallback exists: %s", sport_key, markets, exc)
+        return []
 
 
 def _prefetch_active_sports() -> set:
@@ -5706,21 +5793,50 @@ def run_soccer(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
     active_sports: set = set()
     if _sports_cache_key in _odds_cache:
         _cached_at, active_sports = _odds_cache[_sports_cache_key]
-    excluded_soccer = {
-        "soccer_fifa_world_cup_winner",
-    }
     if active_sports:
-        active_soccer_keys = sorted(
-            k for k in active_sports
-            if k in soccer_scanable_keys() and not k.endswith("_winner") and k not in excluded_soccer
-        )
-        skipped_leagues = sorted(
-            k for k in active_sports
-            if k.startswith("soccer_") and (k.endswith("_winner") or k in excluded_soccer)
-        )
+        active_soccer_keys, skipped_leagues, discovered_soccer_keys = _active_soccer_match_keys(active_sports)
+        if discovered_soccer_keys:
+            _scan_runtime_notes.append(
+                {
+                    "type": "discovered_soccer_leagues",
+                    "sport": "soccer",
+                    "count": len(discovered_soccer_keys),
+                    "reason": "Active soccer match markets were discovered from the odds feed and scanned as review-only coverage.",
+                    "leagues": [_pretty_soccer_league_name(k) for k in discovered_soccer_keys],
+                }
+            )
+            logger.info(
+                "Soccer: discovered %d active review-only league(s) not in registry (%s)",
+                len(discovered_soccer_keys),
+                ", ".join(_pretty_soccer_league_name(k) for k in discovered_soccer_keys[:8])
+                + (" ..." if len(discovered_soccer_keys) > 8 else ""),
+            )
     else:
         active_soccer_keys = soccer_scanable_keys()
         skipped_leagues = []
+
+    if _SOCCER_LEAGUE_SCOPE:
+        scope_set = set(_SOCCER_LEAGUE_SCOPE)
+        before_count = len(active_soccer_keys)
+        active_soccer_keys = [key for key in active_soccer_keys if key in scope_set]
+        inactive_scope = [key for key in _SOCCER_LEAGUE_SCOPE if key not in active_soccer_keys]
+        _scan_runtime_notes.append(
+            {
+                "type": "soccer_league_scope",
+                "sport": "soccer",
+                "count": len(active_soccer_keys),
+                "reason": "Soccer scan was limited to selected competition markets.",
+                "leagues": [_pretty_soccer_league_name(key) for key in _SOCCER_LEAGUE_SCOPE],
+                "inactive_leagues": [_pretty_soccer_league_name(key) for key in inactive_scope],
+            }
+        )
+        logger.info(
+            "Soccer: league scope selected (%s); scanning %d of %d active soccer key(s)",
+            ", ".join(_pretty_soccer_league_name(key) for key in _SOCCER_LEAGUE_SCOPE),
+            len(active_soccer_keys),
+            before_count,
+        )
+
     deferred_review_keys: List[str] = []
     if active_sports:
         active_soccer_keys, deferred_review_keys = _select_soccer_live_scope(active_soccer_keys)
@@ -7380,6 +7496,21 @@ def run_mlb(dry_run: bool = False) -> Tuple[List[dict], List[ParlayLeg]]:
             **build_availability_context("mlb", game, combined),
             **build_environment_context("mlb", home_team, away_team, commence),
         }
+        ctx.update(
+            {
+                "home_rest_days": float(combined.get("home_rest_days", game.get("home_rest_days", 7)) or 7),
+                "away_rest_days": float(combined.get("away_rest_days", game.get("away_rest_days", 7)) or 7),
+                "home_games_L3D": int(float(combined.get("home_games_L3D", 0) or 0)),
+                "away_games_L3D": int(float(combined.get("away_games_L3D", 0) or 0)),
+                "home_3in4": int(float(combined.get("home_3in4", 0) or 0)),
+                "away_3in4": int(float(combined.get("away_3in4", 0) or 0)),
+                "away_travel_km": float(combined.get("away_travel_km", 0.0) or 0.0),
+                "away_travel_tz_shift": float(combined.get("away_travel_tz_shift", 0.0) or 0.0),
+                "away_travel_bucket": float(combined.get("away_travel_bucket", 0.0) or 0.0),
+            }
+        )
+        ctx["bullpen_workload_checked"] = "home_games_L3D" in combined.index and "away_games_L3D" in combined.index
+        ctx["bullpen_fatigue_risk"] = bool(ctx["home_games_L3D"] >= 2 or ctx["away_games_L3D"] >= 2)
 
         x = pd.DataFrame([combined], columns=feature_cols)
         raw_p = trainer.ensemble_model.predict_proba(x)
@@ -8048,6 +8179,7 @@ def write_report(
     focused_prediction_summary: Optional[dict] = None,
     version_snapshot: Optional[dict] = None,
     pre_committee_review_breakdown: Optional[dict[str, int]] = None,
+    scan_sport: Optional[str] = None,
 ) -> Path:
     """Write a combined single-bet + parlay markdown report and JSON summary."""
     report_path = REPORTS_DIR / f"value_bets_{TODAY}.md"
@@ -8380,8 +8512,100 @@ def write_report(
         except Exception:
             existing_summary = None
 
+    def _affected_summary_sports(sport: Optional[str]) -> set[str]:
+        value = str(sport or "").strip().lower()
+        if not value or value == "all":
+            return set()
+        if value == "tennis":
+            return {"tennis", "tennis_wta"}
+        return {value}
+
+    def _merge_single_sport_summary(existing: dict[str, Any], new: dict[str, Any], sport: Optional[str]) -> dict[str, Any]:
+        affected = _affected_summary_sports(sport)
+        if not affected or not isinstance(existing, dict):
+            return new
+
+        merged = dict(existing)
+        merged.update({
+            "date": new.get("date", merged.get("date")),
+            "timestamp": new.get("timestamp", merged.get("timestamp")),
+            "bankroll": new.get("bankroll", merged.get("bankroll")),
+            "requests_remaining": new.get("requests_remaining", merged.get("requests_remaining")),
+            "market_policy": new.get("market_policy", merged.get("market_policy", {})),
+            "focused_prediction_lanes": new.get("focused_prediction_lanes", merged.get("focused_prediction_lanes", {})),
+            "version_snapshot": new.get("version_snapshot", merged.get("version_snapshot", {})),
+        })
+
+        existing_single = dict((existing.get("single_bets") or {}))
+        new_single = dict((new.get("single_bets") or {}))
+        for list_key in ("bets", "review_bets", "suppressed_bets", "bankroll_blocked_bets"):
+            kept = [
+                item for item in (existing_single.get(list_key) or [])
+                if str((item or {}).get("sport") or "") not in affected
+            ]
+            merged_items = kept + list(new_single.get(list_key) or [])
+            existing_single[list_key] = merged_items
+
+        existing_single["total"] = len(existing_single.get("bets") or [])
+        existing_single["review_total"] = len(existing_single.get("review_bets") or [])
+        existing_single["suppressed_total"] = len(existing_single.get("suppressed_bets") or [])
+        existing_single["bankroll_blocked_total"] = len(existing_single.get("bankroll_blocked_bets") or [])
+        existing_single["review_breakdown"] = _review_reason_breakdown(existing_single.get("review_bets") or [])
+        existing_single["stale_price_diagnostics"] = _stale_price_diagnostics(existing_single.get("review_bets") or [])
+        existing_single["by_sport"] = {
+            sport_name: len([b for b in (existing_single.get("bets") or []) if b.get("sport") == sport_name])
+            for sport_name in sorted({str(b.get("sport") or "") for b in (existing_single.get("bets") or []) if b.get("sport")})
+        }
+        merged["single_bets"] = existing_single
+
+        if "soccer" in affected:
+            merged["soccer_games"] = list(new.get("soccer_games") or [])
+        else:
+            merged["soccer_games"] = list(existing.get("soccer_games") or [])
+
+        kept_other = [
+            item for item in (existing.get("other_games") or [])
+            if str((item or {}).get("sport") or "") not in affected
+        ]
+        merged["other_games"] = kept_other + list(new.get("other_games") or [])
+        if affected & {"tennis", "tennis_wta"}:
+            merged["wta_audit"] = list(new.get("wta_audit") or [])
+        else:
+            merged["wta_audit"] = list(existing.get("wta_audit") or [])
+
+        old_diag = existing.get("sport_pipeline_diagnostics") or {}
+        new_diag = new.get("sport_pipeline_diagnostics") or {}
+        old_by_sport = dict(old_diag.get("by_sport") or {})
+        for sport_name, row in (new_diag.get("by_sport") or {}).items():
+            if str(sport_name) in affected:
+                old_by_sport[str(sport_name)] = row
+
+        total_keys = set()
+        for row in old_by_sport.values():
+            if isinstance(row, dict):
+                total_keys.update(k for k, v in row.items() if isinstance(v, int))
+        totals = {
+            key: sum(int((row or {}).get(key, 0) or 0) for row in old_by_sport.values() if isinstance(row, dict))
+            for key in total_keys
+        }
+        merged["sport_pipeline_diagnostics"] = {
+            **old_diag,
+            "by_sport": old_by_sport,
+            "totals": totals,
+        }
+
+        merged["scan_notes"] = list(existing.get("scan_notes") or []) + list(new.get("scan_notes") or [])
+        return merged
+
     preserve_existing_summary = existing_summary_has_content and not new_summary_has_content
     preserve_existing_report = preserve_existing_summary and report_path.exists()
+    summary_to_write = summary
+    if (
+        not preserve_existing_summary
+        and existing_summary_has_content
+        and str(scan_sport or "all").lower() != "all"
+    ):
+        summary_to_write = _merge_single_sport_summary(existing_summary or {}, summary, scan_sport)
 
     if preserve_existing_report:
         logger.warning(
@@ -8398,7 +8622,7 @@ def write_report(
             json_path,
         )
     else:
-        json_path.write_text(json.dumps(summary, indent=2))
+        json_path.write_text(json.dumps(summary_to_write, indent=2))
         logger.info("Summary written: %s", json_path)
 
     return report_path
@@ -8458,6 +8682,13 @@ def main():
         help="Disable soccer speed-mode deferrals and scan the full active soccer scope.",
     )
     parser.add_argument(
+        "--soccer-league",
+        dest="soccer_leagues",
+        action="append",
+        default=[],
+        help="Limit soccer scans to one or more Odds API soccer league keys, e.g. soccer_fifa_world_cup.",
+    )
+    parser.add_argument(
         "--focused-lanes",
         action="store_true",
         help="When --sport all is used, scan only current focused prediction sports/lanes.",
@@ -8483,17 +8714,20 @@ def main():
         help="Send a Telegram test message and exit",
     )
     args = parser.parse_args()
-    global _OFFLINE_ODDS_ONLY, _LEAN_CONTEXT_ONLY, _FORCE_FRESH_ODDS, _FOCUSED_SCAN_ONLY, ODDS_KEY
+    global _OFFLINE_ODDS_ONLY, _LEAN_CONTEXT_ONLY, _FORCE_FRESH_ODDS, _FOCUSED_SCAN_ONLY, _SOCCER_LEAGUE_SCOPE, ODDS_KEY
     _OFFLINE_ODDS_ONLY = _OFFLINE_ODDS_ONLY or args.offline_odds
     _FORCE_FRESH_ODDS = bool(args.force_fresh_odds)
     _LEAN_CONTEXT_ONLY = _LEAN_CONTEXT_ONLY or args.lean_context
     _FOCUSED_SCAN_ONLY = _FOCUSED_SCAN_ONLY or bool(args.focused_lanes)
+    _SOCCER_LEAGUE_SCOPE = _normalize_soccer_league_scope(args.soccer_leagues)
     if _LEAN_CONTEXT_ONLY:
         os.environ["SCAN_LEAN_CONTEXT"] = "1"
     if _FOCUSED_SCAN_ONLY:
         os.environ["SCAN_FOCUSED_LANES"] = "1"
     if args.full_soccer_scope:
         os.environ["SCAN_FULL_SOCCER_SCOPE"] = "1"
+    if _SOCCER_LEAGUE_SCOPE and args.sport not in {"soccer", "all"}:
+        logger.warning("--soccer-league was provided with --sport=%s; it only applies when soccer is scanned.", args.sport)
     if _FORCE_FRESH_ODDS and _OFFLINE_ODDS_ONLY:
         logger.warning("Force-fresh odds requested, but offline odds mode is enabled. Offline mode wins for this run.")
         _FORCE_FRESH_ODDS = False
@@ -8851,6 +9085,7 @@ def main():
         focused_prediction_summary=focused_prediction_summary,
         version_snapshot=version_snapshot,
         pre_committee_review_breakdown=pre_committee_review_breakdown,
+        scan_sport=args.sport,
     )
 
     # ── Console summary ──────────────────────────────────────────────────

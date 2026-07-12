@@ -120,6 +120,13 @@ SOCCER_LEAGUE_NAME_TO_KEY: dict[str, str] = {
     profile.league_label.lower(): key
     for key, profile in SOCCER_COMPETITION_CAPABILITIES.items()
 }
+SOCCER_LEAGUE_SHORTHAND_ALIASES: dict[str, str] = {
+    "world_cup": "soccer_fifa_world_cup",
+    "worldcup": "soccer_fifa_world_cup",
+    "fifa_world_cup": "soccer_fifa_world_cup",
+    "fifa": "soccer_fifa_world_cup",
+    "wc": "soccer_fifa_world_cup",
+}
 
 
 def soccer_scanable_keys() -> list[str]:
@@ -148,6 +155,20 @@ def get_capability_profile(
     resolved_key = resolve_soccer_key(sport_key=sport_key, league=league) if normalized_sport == "soccer" else None
     if resolved_key:
         return SOCCER_COMPETITION_CAPABILITIES[resolved_key]
+    if normalized_sport == "soccer" and sport_key:
+        return CapabilityProfile(
+            sport="soccer",
+            league_key=str(sport_key),
+            league_label=soccer_pretty_label(str(sport_key)),
+            scanable=True,
+            model_backed=False,
+            publishable=False,
+            review_only=True,
+            reasoning_supported=True,
+            competition_code=None,
+            launch_label="Review",
+            launch_note="Active soccer market discovered from the odds feed, but not yet mapped to production model coverage.",
+        )
     if normalized_sport in SPORT_BASE_CAPABILITIES:
         return SPORT_BASE_CAPABILITIES[normalized_sport]
     return CapabilityProfile(

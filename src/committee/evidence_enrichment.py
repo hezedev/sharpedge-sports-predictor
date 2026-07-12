@@ -1850,11 +1850,12 @@ class EvidenceEnrichmentPass:
                     "value": round(home_rest_days - away_rest_days, 3),
                 }
             )
-        home_wpct = _as_float(snapshot.get("home_home_wpct_20"))
-        away_wpct = _as_float(snapshot.get("away_away_wpct_20"))
-        if home_wpct is not None and away_wpct is not None:
-            context["park_factor_proxy"] = round(home_wpct - away_wpct, 4)
-            details["park_factor_status"] = "checked_proxy"
+        if "park_factor_proxy" not in context:
+            home_wpct = _as_float(snapshot.get("home_home_wpct_20"))
+            away_wpct = _as_float(snapshot.get("away_away_wpct_20"))
+            if home_wpct is not None and away_wpct is not None:
+                context["park_factor_proxy"] = round(home_wpct - away_wpct, 4)
+                details["park_factor_status"] = "checked_proxy"
         if _candidate_weather_material(candidate):
             details["weather_status"] = details["weather_status"] or "missing"
 

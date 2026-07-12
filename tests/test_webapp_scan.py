@@ -101,6 +101,137 @@ def test_scan_start_forwards_force_fresh_odds(monkeypatch):
     assert "--force-fresh-odds" in captured["cmd"]
 
 
+def test_scan_start_runs_multiple_targeted_sports_with_force_fresh(monkeypatch):
+    captured = []
+
+    def _fake_popen(cmd, **kwargs):
+        captured.append(cmd)
+        return _FakeProc(cmd, **kwargs)
+
+    monkeypatch.setattr(webapp_app.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(webapp_app.subprocess, "Popen", _fake_popen)
+    webapp_app._scan_running = False
+    webapp_app._scan_proc = None
+    webapp_app._scan_log = []
+
+    client = webapp_app.app.test_client()
+    response = client.post(
+        "/api/scan/start",
+        json={
+            "sports": ["mlb", "basketball"],
+            "market": "all",
+            "force_fresh_odds": True,
+        },
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload["sports"] == ["mlb", "basketball"]
+    assert len(captured) == 2
+    assert ["--sport", "mlb"] == captured[0][captured[0].index("--sport"):captured[0].index("--sport") + 2]
+    assert ["--sport", "basketball"] == captured[1][captured[1].index("--sport"):captured[1].index("--sport") + 2]
+    assert all("--force-fresh-odds" in cmd for cmd in captured)
+    assert "--focused-lanes" not in captured[0]
+    assert "--focused-lanes" not in captured[1]
+
+
+def test_scan_start_blocks_broad_force_fresh_by_default(monkeypatch):
+    captured = {}
+
+    def _fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProc(cmd, **kwargs)
+
+    monkeypatch.setattr(webapp_app.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(webapp_app.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(
+        webapp_app,
+        "_odds_key_pool_summary",
+        lambda: {"tracked_unavailable_count": 2, "runtime_loaded_count": 1},
+    )
+    webapp_app._scan_running = False
+    webapp_app._scan_proc = None
+    webapp_app._scan_log = []
+
+    client = webapp_app.app.test_client()
+    response = client.post(
+        "/api/scan/start",
+        json={
+            "sport": "all",
+            "market": "all",
+            "force_fresh_odds": True,
+            "focused_lanes": True,
+        },
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert "--force-fresh-odds" not in captured["cmd"]
+    assert any("force-fresh odds disabled" in note for note in payload["safety_notes"])
+    assert any("not loaded at runtime" in line for line in webapp_app._scan_log)
+
+
+def test_scan_start_all_defaults_to_full_sport_scope(monkeypatch):
+    captured = {}
+
+    def _fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProc(cmd, **kwargs)
+
+    monkeypatch.setattr(webapp_app.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(webapp_app.subprocess, "Popen", _fake_popen)
+    webapp_app._scan_running = False
+    webapp_app._scan_proc = None
+    webapp_app._scan_log = []
+
+    client = webapp_app.app.test_client()
+    response = client.post(
+        "/api/scan/start",
+        json={
+            "sport": "all",
+            "market": "all",
+        },
+    )
+
+    assert response.status_code == 200
+    assert ["--sport", "all"] == captured["cmd"][captured["cmd"].index("--sport"):captured["cmd"].index("--sport") + 2]
+    assert "--focused-lanes" not in captured["cmd"]
+
+
+def test_scan_start_allows_explicit_broad_force_fresh_override(monkeypatch):
+    captured = {}
+
+    def _fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProc(cmd, **kwargs)
+
+    monkeypatch.setattr(webapp_app.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(webapp_app.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(
+        webapp_app,
+        "_odds_key_pool_summary",
+        lambda: {"tracked_unavailable_count": 0, "runtime_loaded_count": 2},
+    )
+    webapp_app._scan_running = False
+    webapp_app._scan_proc = None
+    webapp_app._scan_log = []
+
+    client = webapp_app.app.test_client()
+    response = client.post(
+        "/api/scan/start",
+        json={
+            "sport": "all",
+            "market": "all",
+            "force_fresh_odds": True,
+            "allow_broad_force_fresh": True,
+            "focused_lanes": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "--force-fresh-odds" in captured["cmd"]
+
+
 def test_scan_start_forwards_lean_context(monkeypatch):
     captured = {}
 
@@ -260,6 +391,38 @@ def test_scan_start_forwards_full_soccer_scope(monkeypatch):
     assert "--full-soccer-scope" in captured["cmd"]
 
 
+def test_scan_start_world_cup_chip_runs_scoped_soccer_scan(monkeypatch):
+    captured = {}
+
+    def _fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProc(cmd, **kwargs)
+
+    monkeypatch.setattr(webapp_app.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(webapp_app.subprocess, "Popen", _fake_popen)
+    webapp_app._scan_running = False
+    webapp_app._scan_proc = None
+    webapp_app._scan_log = []
+
+    client = webapp_app.app.test_client()
+    response = client.post(
+        "/api/scan/start",
+        json={
+            "sports": ["soccer_fifa_world_cup"],
+            "market": "all",
+            "force_fresh_odds": True,
+        },
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload["sports"] == ["soccer"]
+    assert payload["soccer_leagues"] == ["soccer_fifa_world_cup"]
+    assert ["--sport", "soccer"] == captured["cmd"][captured["cmd"].index("--sport"):captured["cmd"].index("--sport") + 2]
+    assert ["--soccer-league", "soccer_fifa_world_cup"] == captured["cmd"][captured["cmd"].index("--soccer-league"):captured["cmd"].index("--soccer-league") + 2]
+    assert "--force-fresh-odds" in captured["cmd"]
+
+
 def test_api_picks_returns_market_policy(tmp_path, monkeypatch):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     reports_dir = tmp_path / "reports"
@@ -382,6 +545,202 @@ def test_api_picks_exposes_sport_scan_counts(tmp_path, monkeypatch):
     assert payload["sport_scan_counts"]["mlb"] == 1
     assert payload["sport_scan_counts"]["tennis_wta"] == 1
     assert any(note.get("type") == "sport_scan_counts" for note in payload["scan_notes"])
+
+
+def test_api_picks_accepts_multiple_sport_filters(tmp_path, monkeypatch):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    (reports_dir / f"summary_{today}.json").write_text(json.dumps({
+        "single_bets": {
+            "bets": [
+                {"sport": "mlb", "team": "Yankees", "market": "moneyline", "edge": 0.06, "odds": 1.9},
+                {"sport": "nhl", "team": "Rangers", "market": "moneyline", "edge": 0.05, "odds": 2.0},
+                {"sport": "soccer", "team": "Arsenal", "market": "moneyline", "edge": 0.04, "odds": 1.8},
+            ],
+            "review_bets": [
+                {"sport": "basketball", "team": "Knicks", "market": "moneyline", "edge": 0.03, "odds": 1.95},
+                {"sport": "mlb", "team": "Dodgers", "market": "moneyline", "edge": 0.03, "odds": 1.85},
+            ],
+        }
+    }))
+
+    monkeypatch.setattr(webapp_app, "BASE", tmp_path)
+
+    client = webapp_app.app.test_client()
+    response = client.get("/api/picks?sport=mlb&sport=nhl")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert {bet["sport"] for bet in payload["bets"]} == {"mlb", "nhl"}
+    assert {bet["sport"] for bet in payload["review_bets"]} == {"mlb"}
+
+
+def test_api_games_accepts_multiple_sport_filters(tmp_path, monkeypatch):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    (reports_dir / f"summary_{today}.json").write_text(json.dumps({
+        "soccer_games": [{"home": "A", "away": "B", "outcomes": []}],
+        "other_games": [
+            {"sport": "mlb", "home": "Yankees", "away": "Red Sox"},
+            {"sport": "nhl", "home": "Rangers", "away": "Bruins"},
+            {"sport": "basketball", "home": "Knicks", "away": "Celtics"},
+        ],
+        "single_bets": {"bets": [], "review_bets": []},
+    }))
+
+    monkeypatch.setattr(webapp_app, "BASE", tmp_path)
+
+    client = webapp_app.app.test_client()
+    response = client.get("/api/games?sport=mlb&sport=nhl")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert {game["sport"] for game in payload["games"]} == {"mlb", "nhl"}
+
+
+def test_api_games_explains_why_production_game_is_not_on_pick_board(tmp_path, monkeypatch):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    (reports_dir / f"summary_{today}.json").write_text(json.dumps({
+        "other_games": [
+            {
+                "sport": "mlb",
+                "home": "Yankees",
+                "away": "Red Sox",
+                "league": "MLB",
+                "model_available": True,
+                "model_pick": "Yankees",
+                "home_odds": 2.02,
+                "away_odds": 1.90,
+                "mlb_probability_debug": {
+                    "final_probs": {"home": 0.53, "away": 0.47},
+                    "market_probs": {"home": 0.50, "away": 0.50},
+                },
+            }
+        ],
+        "single_bets": {
+            "bets": [],
+            "review_bets": [
+                {
+                    "sport": "mlb",
+                    "home": "Yankees",
+                    "away": "Red Sox",
+                    "team": "Yankees",
+                    "market": "moneyline",
+                    "edge": 0.03,
+                    "ml_prob": 0.53,
+                    "fair_prob": 0.50,
+                    "review_reason": "availability or starter uncertainty still needs human review",
+                    "research_mind_missing_evidence": ["confirmed lineup"],
+                }
+            ],
+            "suppressed_bets": [],
+        },
+    }))
+
+    monkeypatch.setattr(webapp_app, "BASE", tmp_path)
+
+    client = webapp_app.app.test_client()
+    response = client.get("/api/games?sport=mlb")
+
+    assert response.status_code == 200
+    game = response.get_json()["games"][0]
+    assert game["board_status"] == "review"
+    assert "availability" in game["board_reason"]
+    assert "confirmed lineup" in game["missing_to_promote"]
+    assert game["best_candidate"]["team"] == "Yankees"
+
+
+def test_api_games_marks_passed_production_game_with_best_edge_gap(tmp_path, monkeypatch):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    (reports_dir / f"summary_{today}.json").write_text(json.dumps({
+        "other_games": [
+            {
+                "sport": "mlb",
+                "home": "Yankees",
+                "away": "Red Sox",
+                "league": "MLB",
+                "model_available": True,
+                "model_pick": "Yankees",
+                "home_odds": 2.02,
+                "away_odds": 1.90,
+                "mlb_probability_debug": {
+                    "final_probs": {"home": 0.515, "away": 0.485},
+                    "market_probs": {"home": 0.50, "away": 0.50},
+                },
+            }
+        ],
+        "single_bets": {"bets": [], "review_bets": [], "suppressed_bets": []},
+    }))
+
+    monkeypatch.setattr(webapp_app, "BASE", tmp_path)
+
+    client = webapp_app.app.test_client()
+    response = client.get("/api/games?sport=mlb")
+
+    assert response.status_code == 200
+    game = response.get_json()["games"][0]
+    assert game["board_status"] == "no_candidate"
+    assert "below the 3.0pp candidate threshold" in game["board_reason"]
+    assert "edge/EV above threshold after no-vig market comparison" in game["missing_to_promote"]
+
+
+def test_api_adds_odds_api_keys_to_existing_pool(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("ODDS_API_KEY=existing-key-11111111\nODDS_API_KEYS=existing-key-11111111\n")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "odds_key_pool.json").write_text("{}")
+    monkeypatch.setattr(webapp_app, "BASE", tmp_path)
+    monkeypatch.setenv("ODDS_API_KEY", "existing-key-11111111")
+    monkeypatch.setenv("ODDS_API_KEYS", "existing-key-11111111")
+
+    client = webapp_app.app.test_client()
+    response = client.post(
+        "/api/apis/odds-keys/add",
+        json={"value": "new-key-22222222\nbad key"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["added_count"] == 1
+    assert "22222222" in payload["added_fingerprints"]
+    assert "existing-key-11111111,new-key-22222222" in env_path.read_text()
+    assert any(item["reason"] == "invalid_format" for item in payload["excluded"])
+
+
+def test_api_prunes_exhausted_runtime_odds_keys(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("ODDS_API_KEY=empty-key-11111111\nODDS_API_KEYS=empty-key-11111111,backup-key-22222222\n")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "odds_key_pool.json").write_text(json.dumps({
+        "11111111": {"fingerprint": "11111111", "remaining": 0},
+        "22222222": {"fingerprint": "22222222", "remaining": 120},
+        "_meta": {
+            "last_selected_fingerprint": "11111111",
+            "runtime_loaded_fingerprints": ["11111111", "22222222"],
+            "usable_fingerprints": ["11111111", "22222222"],
+        },
+    }))
+    monkeypatch.setattr(webapp_app, "BASE", tmp_path)
+    monkeypatch.setenv("ODDS_API_KEY", "empty-key-11111111")
+    monkeypatch.setenv("ODDS_API_KEYS", "empty-key-11111111,backup-key-22222222")
+
+    client = webapp_app.app.test_client()
+    response = client.post("/api/apis/odds-keys/prune-exhausted", json={})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["removed_fingerprints"] == ["11111111"]
+    text = env_path.read_text()
+    assert "empty-key-11111111" not in text
+    assert "backup-key-22222222" in text
 
 
 def test_api_picks_exposes_sport_funnel_diagnostics(tmp_path, monkeypatch):

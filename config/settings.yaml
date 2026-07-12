@@ -92,6 +92,12 @@ sports:
         country: "World"
         season_mode: "calendar"
         season_years: [2024, 2023, 2022]
+      - key: "soccer_fifa_world_cup"
+        league_id: 1
+        name: "World Cup"
+        country: "World"
+        season_mode: "calendar"
+        season_years: [2022, 2018, 2014]
       - key: "soccer_argentina_primera_division"
         league_id: 128
         name: "Liga Profesional Argentina"

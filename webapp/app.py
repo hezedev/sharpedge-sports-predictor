@@ -34,6 +34,17 @@ load_dotenv(BASE / ".env", override=True)
 
 app = Flask(__name__)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+WORLD_CUP_PROJECT_DIR = BASE / "world-cup-predictor"
+WORLD_CUP_DEFAULT_PYTHON = BASE / ".venv" / "bin" / "python"
+WORLD_CUP_DEFAULT_MODEL_DIR = (
+    WORLD_CUP_PROJECT_DIR
+    / "models"
+    / "poisson"
+    / "team_strength_operational"
+    / "20260613T094608Z"
+)
+WORLD_CUP_DEFAULT_TEAMS_CSV = WORLD_CUP_PROJECT_DIR / "data/reference/world_cup_2026_teams.csv"
+WORLD_CUP_DEFAULT_ANNEXE_C = WORLD_CUP_PROJECT_DIR / "data/reference/annexe_c_fifa_may_2026.csv"
 
 
 @app.after_request
@@ -53,7 +64,14 @@ from src.markets.policy import annotate_bet, summarize_focused_prediction_policy
 from src.data.source_registry import source_status_summary
 from src.risk.parlay_builder import ParlayBuilder, ParlayLeg
 from src.models.artifacts import calibrator_path_for_tag, get_current_model_tag
-from src.utils.odds_quota import get_odds_budget_status, get_primary_odds_api_key, parse_odds_api_keys_from_env
+from src.utils.odds_quota import (
+    api_key_fingerprint,
+    get_odds_budget_status,
+    get_primary_odds_api_key,
+    is_valid_odds_api_key,
+    normalize_odds_api_key,
+    parse_odds_api_keys_from_env,
+)
 from src.utils.results_tracker import (
     compute_summary,
     get_settled,
@@ -61,7 +79,11 @@ from src.utils.results_tracker import (
     mistake_report as _mistake_report,
     parlay_breakdown as _parlay_breakdown,
 )
-from src.utils.sport_registry import enrich_with_capability, get_capability_profile
+from src.utils.sport_registry import (
+    SOCCER_LEAGUE_SHORTHAND_ALIASES,
+    enrich_with_capability,
+    get_capability_profile,
+)
 
 # ── Hybrid Quota Bridge ────────────────────────────────────────────────────────
 try:
@@ -519,6 +541,164 @@ def _resolve_decision_fields(item: dict) -> dict:
     return enriched
 
 
+def _norm_match_part(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _game_match_key(item: dict, default_sport: str = "") -> tuple[str, str, str]:
+    sport = _norm_match_part(item.get("sport") or default_sport)
+    return (sport, _norm_match_part(item.get("home")), _norm_match_part(item.get("away")))
+
+
+def _promotion_candidate_index(summary: dict[str, Any]) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
+    indexed: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    single_bets = (summary.get("single_bets") or {}) if isinstance(summary, dict) else {}
+    buckets = (
+        ("bets", "published"),
+        ("review_bets", "review"),
+        ("suppressed_bets", "suppressed"),
+        ("bankroll_blocked_bets", "bankroll_blocked"),
+    )
+    for bucket, board_status in buckets:
+        for raw in single_bets.get(bucket, []) or []:
+            if not isinstance(raw, dict):
+                continue
+            candidate = _resolve_decision_fields(dict(raw))
+            candidate["board_status"] = board_status
+            indexed[_game_match_key(candidate)].append(candidate)
+    return indexed
+
+
+def _best_game_edge_snapshot(game: dict[str, Any]) -> dict[str, Any]:
+    outcomes = game.get("outcomes") if isinstance(game.get("outcomes"), list) else []
+    best_outcome = None
+    for outcome in outcomes:
+        if not isinstance(outcome, dict):
+            continue
+        edge = outcome.get("edge")
+        odds = outcome.get("odds")
+        if edge is None or odds is None:
+            continue
+        try:
+            if float(odds) < 1.01:
+                continue
+        except Exception:
+            continue
+        if best_outcome is None or float(edge or 0) > float(best_outcome.get("edge") or 0):
+            best_outcome = outcome
+    if best_outcome is not None:
+        return {
+            "team": best_outcome.get("team") or best_outcome.get("label"),
+            "market": "moneyline" if best_outcome.get("label") in {"Home Win", "Draw", "Away Win"} else str(best_outcome.get("label") or "market"),
+            "edge": best_outcome.get("edge"),
+            "model_probability": best_outcome.get("ml_prob"),
+            "market_probability": best_outcome.get("fair_prob"),
+            "odds": best_outcome.get("odds"),
+        }
+
+    sport = str(game.get("sport") or "").strip().lower()
+    debug = game.get(f"{sport}_probability_debug") if sport else None
+    if isinstance(debug, dict):
+        pick_key = "home" if _norm_match_part(game.get("model_pick")) == _norm_match_part(game.get("home")) else "away"
+        final_prob = ((debug.get("final_probs") or {}).get(pick_key))
+        market_prob = ((debug.get("market_probs") or {}).get(pick_key))
+        edge = None
+        try:
+            if final_prob is not None and market_prob is not None:
+                edge = float(final_prob) - float(market_prob)
+        except Exception:
+            edge = None
+        return {
+            "team": game.get("model_pick"),
+            "market": "moneyline",
+            "edge": edge,
+            "model_probability": final_prob,
+            "market_probability": market_prob,
+            "odds": game.get("home_odds") if pick_key == "home" else game.get("away_odds"),
+        }
+    return {}
+
+
+def _friendly_promotion_requirements(game: dict[str, Any], related: list[dict[str, Any]]) -> dict[str, Any]:
+    status_rank = {"published": 0, "review": 1, "bankroll_blocked": 2, "suppressed": 3}
+    ordered = sorted(
+        related or [],
+        key=lambda item: (
+            status_rank.get(str(item.get("board_status")), 9),
+            -float(item.get("edge") or 0),
+        ),
+    )
+    best = ordered[0] if ordered else {}
+    snapshot = _best_game_edge_snapshot(game)
+    missing: list[str] = []
+    reason = ""
+    board_status = "no_candidate"
+
+    if best:
+        board_status = str(best.get("board_status") or "candidate")
+        reason = str(
+            best.get("decision_reason")
+            or best.get("suppression_reason")
+            or best.get("review_reason")
+            or best.get("publication_reason")
+            or ""
+        ).strip()
+        missing.extend(_as_text_list(best.get("research_mind_missing_evidence")))
+        missing.extend(_as_text_list(best.get("research_mind_sport_specific_missing_evidence")))
+        missing.extend(_as_text_list(best.get("arbiter_veto_flags")))
+        if board_status == "published":
+            missing = []
+            reason = "Already cleared the picks board."
+        elif not missing and reason:
+            missing.append(reason)
+    else:
+        if not bool(game.get("model_available", False)):
+            reason = "No model-backed probability was available for this game."
+            missing.append("model/history coverage")
+        elif bool(game.get("review_only", False)):
+            reason = str(game.get("review_reason") or game.get("launch_note") or "This league/market is review-only.")
+            missing.append("production model coverage for this league/market")
+        elif bool(game.get("abstain", False)):
+            reason = "Line movement or market instability triggered an abstain."
+            missing.append("stable market price")
+        else:
+            edge = snapshot.get("edge")
+            try:
+                edge_pct = float(edge) * 100 if edge is not None else None
+            except Exception:
+                edge_pct = None
+            if edge_pct is None:
+                reason = "No priced edge was found for the board."
+            elif edge_pct < 3.0:
+                reason = f"Best priced edge was {edge_pct:.1f}pp, below the 3.0pp candidate threshold."
+            else:
+                reason = "A possible edge existed, but it did not survive market/evidence guardrails."
+            missing.append("edge/EV above threshold after no-vig market comparison")
+
+    deduped_missing: list[str] = []
+    seen: set[str] = set()
+    for item in missing:
+        text = str(item or "").strip()
+        key = text.lower()
+        if text and key not in seen:
+            seen.add(key)
+            deduped_missing.append(text)
+
+    return {
+        "board_status": board_status,
+        "board_reason": reason,
+        "missing_to_promote": deduped_missing[:4],
+        "best_candidate": {
+            "team": best.get("team") or snapshot.get("team"),
+            "market": best.get("market") or snapshot.get("market"),
+            "edge": best.get("edge", snapshot.get("edge")),
+            "model_probability": best.get("ml_prob", snapshot.get("model_probability")),
+            "market_probability": best.get("fair_prob", snapshot.get("market_probability")),
+            "odds": best.get("odds", snapshot.get("odds")),
+        },
+    }
+
+
 def _reasoning_display_label(item: dict) -> str:
     decision_status = str(item.get("decision_status") or "").strip().upper()
     sport = str(item.get("sport", "")).upper()
@@ -971,7 +1151,7 @@ def _odds_key_pool_summary() -> dict[str, Any]:
                 metadata_age_hours = None
         runtime_available = fingerprint in runtime_loaded_set
         tracked = fingerprint in tracked_fp_set or fingerprint in tracked_rows
-        usable = (fingerprint in usable_set) if usable_set else runtime_available
+        usable = runtime_available
         auth_quarantined_until = str(row.get("auth_quarantined_until") or "")
         auth_quarantine_reason = str(row.get("auth_quarantine_reason") or "")
         auth_quarantined = False
@@ -991,6 +1171,10 @@ def _odds_key_pool_summary() -> dict[str, Any]:
         elif tracked and not runtime_available:
             status = "raw_key_missing"
             exclusion_reason = excluded_by_fp.get(fingerprint) or "raw_key_missing"
+        elif remaining_value is not None and remaining_value <= 0:
+            usable = False
+            status = "quota_exhausted"
+            exclusion_reason = excluded_by_fp.get(fingerprint) or "quota_exhausted"
         elif remaining_value is not None and remaining_value < low_threshold:
             status = "low"
             exclusion_reason = excluded_by_fp.get(fingerprint) or ""
@@ -999,6 +1183,9 @@ def _odds_key_pool_summary() -> dict[str, Any]:
             exclusion_reason = excluded_by_fp.get(fingerprint) or ""
         elif runtime_available and tracked and usable:
             status = "usable"
+            exclusion_reason = excluded_by_fp.get(fingerprint) or ""
+        elif runtime_available and usable:
+            status = "runtime_only"
             exclusion_reason = excluded_by_fp.get(fingerprint) or ""
         else:
             status = "runtime_only"
@@ -1031,16 +1218,19 @@ def _odds_key_pool_summary() -> dict[str, Any]:
     active_row = next((row for row in rows if row["selected"]), None)
     tracked_unavailable_count = sum(1 for row in rows if row["status"] == "raw_key_missing")
     low_quota_count = sum(1 for row in rows if row["status"] == "low")
+    quota_exhausted_count = sum(1 for row in rows if row["status"] == "quota_exhausted")
     stale_metadata_count = sum(1 for row in rows if row["status"] == "stale_metadata")
+    usable_count = sum(1 for row in rows if row.get("usable"))
     return {
         "enabled": bool(rows),
         "count": len(rows),
         "canonical_pool_path": str(path.resolve()),
         "tracked_count": len(tracked_fp_set) if tracked_fp_set else len(tracked_rows),
         "runtime_loaded_count": len(runtime_loaded_fingerprints),
-        "usable_count": len(usable_fingerprints) if usable_fingerprints else len(runtime_loaded_fingerprints),
+        "usable_count": usable_count,
         "tracked_but_unavailable_count": tracked_unavailable_count,
         "low_quota_count": low_quota_count,
+        "quota_exhausted_count": quota_exhausted_count,
         "stale_metadata_count": stale_metadata_count,
         "total_remaining": int(sum(remaining_values)) if remaining_values else None,
         "last_selected_fingerprint": active_fp,
@@ -2407,16 +2597,24 @@ def api_games():
     if not summary:
         return jsonify({"games": [], "error": summary_error or "No scan summary available.", "summary_date": summary_date})
 
-    sport_filter  = request.args.get("sport")
+    sports_filter: list[str] = []
+    for raw in request.args.getlist("sport"):
+        sports_filter.extend([
+            part.strip()
+            for part in str(raw).split(",")
+            if part.strip() and part.strip() != "all"
+        ])
+    sports_filter = sorted(set(sports_filter))
     request.args.get("market")  # accepted but not yet used as a filter
     window_filter = request.args.get("window")
     date_filter = request.args.get("date", "").strip()
 
     games = []
     seen  = set()   # dedup key: (sport, home, away)
+    promotion_index = _promotion_candidate_index(summary)
 
     # ── Soccer: full game list (all 36 games, not just value bets) ────────────
-    if not sport_filter or sport_filter == "soccer":
+    if not sports_filter or "soccer" in sports_filter:
         for g in summary.get("soccer_games", []):
             key = ("soccer", g.get("home", ""), g.get("away", ""))
             if key in seen:
@@ -2445,8 +2643,12 @@ def api_games():
                 "home_odds":  odds_map.get("Home Win"),
                 "draw_odds":  odds_map.get("Draw"),
                 "away_odds":  odds_map.get("Away Win"),
-                "has_value":  any(o.get("has_value") for o in g.get("outcomes", [])),
+                "has_value":  any(o.get("has_value") for o in g.get("outcomes", []) if isinstance(o, dict)),
             }, "soccer"))
+            game_row.update(_friendly_promotion_requirements(
+                {**game_row, "outcomes": g.get("outcomes", [])},
+                promotion_index.get(_game_match_key(game_row, "soccer"), []),
+            ))
             if window_filter and not _window_matches(game_row, window_filter):
                 continue
             if date_filter and _event_local_date_str(game_row.get("commence")) != date_filter:
@@ -2456,7 +2658,7 @@ def api_games():
     # ── Other sports: use other_games list (all games, not just value bets) ──
     for g in summary.get("other_games", []):
         sport = g.get("sport", "")
-        if sport_filter and sport != sport_filter:
+        if sports_filter and sport not in sports_filter:
             continue
 
         home = g.get("home", "")
@@ -2486,6 +2688,10 @@ def api_games():
             "basketball_probability_debug": g.get("basketball_probability_debug"),
             "nhl_probability_debug": g.get("nhl_probability_debug"),
         }, sport))
+        game_row.update(_friendly_promotion_requirements(
+            {**g, **game_row},
+            promotion_index.get(_game_match_key(game_row, sport), []),
+        ))
         if window_filter and not _window_matches(game_row, window_filter):
             continue
         if date_filter and _event_local_date_str(game_row.get("commence")) != date_filter:
@@ -7107,59 +7313,129 @@ def api_scan_start():
         return jsonify({"error": "Scan already running"}), 409
 
     data    = request.get_json() or {}
-    sport   = data.get("sport", "all")    # single sport string or "all"
+    sport   = data.get("sport", "all")    # single sport string, "multi", or "all"
+    requested_sports_raw = data.get("sports") or []
+    requested_soccer_leagues_raw = data.get("soccer_leagues") or data.get("soccer_league") or []
+    if isinstance(requested_sports_raw, str):
+        requested_sports = [part.strip() for part in requested_sports_raw.split(",") if part.strip()]
+    elif isinstance(requested_sports_raw, list):
+        requested_sports = [str(part).strip() for part in requested_sports_raw if str(part).strip()]
+    else:
+        requested_sports = []
+    if isinstance(requested_soccer_leagues_raw, str):
+        requested_soccer_leagues = [part.strip() for part in requested_soccer_leagues_raw.split(",") if part.strip()]
+    elif isinstance(requested_soccer_leagues_raw, list):
+        requested_soccer_leagues = [str(part).strip() for part in requested_soccer_leagues_raw if str(part).strip()]
+    else:
+        requested_soccer_leagues = []
+    cli_sport_aliases = {"tennis_wta": "tennis"}
+    soccer_league_aliases = SOCCER_LEAGUE_SHORTHAND_ALIASES
+    for selected in list(requested_sports):
+        normalized_selected = str(selected).strip().lower()
+        if normalized_selected.startswith("soccer_") or normalized_selected in soccer_league_aliases:
+            league_key = soccer_league_aliases.get(normalized_selected, normalized_selected)
+            if league_key not in requested_soccer_leagues:
+                requested_soccer_leagues.append(league_key)
+    requested_sports = [
+        selected
+        for selected in requested_sports
+        if not (str(selected).strip().lower().startswith("soccer_") or str(selected).strip().lower() in soccer_league_aliases)
+    ]
+    if requested_soccer_leagues and "soccer" not in requested_sports:
+        requested_sports.append("soccer")
+    supported_cli_sports = {"soccer", "basketball", "tennis", "mlb", "nhl"}
+    scan_sports: list[str] = []
+    for selected in requested_sports:
+        mapped = cli_sport_aliases.get(selected, selected)
+        if mapped in supported_cli_sports and mapped not in scan_sports:
+            scan_sports.append(mapped)
+    if not scan_sports and sport not in {"all", "multi", None, ""}:
+        mapped = cli_sport_aliases.get(str(sport), str(sport))
+        if mapped in supported_cli_sports:
+            scan_sports = [mapped]
+    if not scan_sports:
+        scan_sports = ["all"]
+    sport = scan_sports[0] if len(scan_sports) == 1 else ("all" if scan_sports == ["all"] else "multi")
     market  = data.get("market", "all")   # "moneyline" | "spreads" | "totals" | "all"
     retrain = data.get("retrain", False)
     offline_odds = data.get("offline_odds", False)
     force_fresh_odds = data.get("force_fresh_odds", False)
     lean_context = data.get("lean_context", False)
     context_referee = data.get("context_referee", False)
-    full_soccer_scope = data.get("full_soccer_scope", False)
-    focused_lanes = data.get("focused_lanes", sport == "all")
+    full_soccer_scope = data.get("full_soccer_scope", True)
+    focused_lanes = bool(data.get("focused_lanes", False))
+    safety_notes: list[str] = []
+
+    if scan_sports == ["all"] and force_fresh_odds and not data.get("allow_broad_force_fresh", False):
+        force_fresh_odds = False
+        safety_notes.append(
+            "[scan] Safety: force-fresh odds disabled for all-sport scan. "
+            "Choose one or more specific sports, or pass allow_broad_force_fresh=true from an advanced client."
+        )
+
+    odds_pool = _odds_key_pool_summary()
+    raw_missing = int(odds_pool.get("tracked_unavailable_count") or odds_pool.get("tracked_but_unavailable_count") or 0)
+    runtime_count = int(odds_pool.get("runtime_loaded_count") or 0)
+    if raw_missing:
+        safety_notes.append(
+            f"[scan] Notice: {raw_missing} tracked Odds API key(s) are not loaded at runtime; "
+            "add raw keys to ODDS_API_KEYS if you want them available for rotation."
+        )
+    if runtime_count <= 1:
+        safety_notes.append("[scan] Notice: only one Odds API key is available at runtime; quota rotation is limited.")
 
     def _run():
         global _scan_running, _scan_log, _scan_proc
         _scan_running = True
         _scan_log     = ["[scan] Starting…"]
+        _scan_log.extend(safety_notes)
 
         bankroll = data.get("bankroll", float(os.getenv("INITIAL_BANKROLL", 1000)))
-        cmd = [sys.executable, str(BASE / "daily_scan.py"),
-               "--record-bets",
-               "--bankroll", str(bankroll),
-               "--sport", sport or "all",
-               "--market", market or "all"]
-        if retrain:
-            cmd += ["--retrain"]
-        if offline_odds:
-            cmd += ["--offline-odds"]
-        if force_fresh_odds:
-            cmd += ["--force-fresh-odds"]
-        if lean_context:
-            cmd += ["--lean-context"]
-        if context_referee:
-            cmd += ["--context-referee"]
-        if full_soccer_scope:
-            cmd += ["--full-soccer-scope"]
-        if focused_lanes:
-            cmd += ["--focused-lanes"]
-        if data.get("notify", False):
-            cmd += ["--notify"]
-
         try:
-            proc = subprocess.Popen(
-                cmd, cwd=str(BASE),
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
-            )
-            _scan_proc = proc
-            for line in proc.stdout:
-                line = line.rstrip()
-                _scan_log.append(line)
-            proc.wait()
-            if proc.returncode == -15 or proc.returncode == -9:
-                _scan_log.append("[scan] Stopped by user.")
-            else:
-                _scan_log.append(f"[scan] Finished (exit {proc.returncode})")
+            for idx, run_sport in enumerate(scan_sports, start=1):
+                if len(scan_sports) > 1:
+                    _scan_log.append(f"[scan] Launching {run_sport} scan ({idx}/{len(scan_sports)})…")
+                cmd = [sys.executable, str(BASE / "daily_scan.py"),
+                       "--record-bets",
+                       "--bankroll", str(bankroll),
+                       "--sport", run_sport,
+                       "--market", market or "all"]
+                if retrain:
+                    cmd += ["--retrain"]
+                if offline_odds:
+                    cmd += ["--offline-odds"]
+                if force_fresh_odds:
+                    cmd += ["--force-fresh-odds"]
+                if lean_context:
+                    cmd += ["--lean-context"]
+                if context_referee:
+                    cmd += ["--context-referee"]
+                if full_soccer_scope:
+                    cmd += ["--full-soccer-scope"]
+                if run_sport == "soccer":
+                    for soccer_league in requested_soccer_leagues:
+                        cmd += ["--soccer-league", soccer_league]
+                if focused_lanes and run_sport == "all":
+                    cmd += ["--focused-lanes"]
+                if data.get("notify", False):
+                    cmd += ["--notify"]
+
+                proc = subprocess.Popen(
+                    cmd, cwd=str(BASE),
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
+                )
+                _scan_proc = proc
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    _scan_log.append(line)
+                proc.wait()
+                if proc.returncode == -15 or proc.returncode == -9:
+                    _scan_log.append("[scan] Stopped by user.")
+                    break
+                _scan_log.append(f"[scan] {run_sport} finished (exit {proc.returncode})")
+                if proc.returncode:
+                    break
         except Exception as e:
             _scan_log.append(f"[scan] ERROR: {e}")
         finally:
@@ -7167,7 +7443,13 @@ def api_scan_start():
             _scan_proc = None
 
     threading.Thread(target=_run, daemon=True).start()
-    return jsonify({"started": True})
+    return jsonify({
+        "started": True,
+        "sport": sport,
+        "sports": scan_sports,
+        "soccer_leagues": requested_soccer_leagues,
+        "safety_notes": safety_notes,
+    })
 
 
 @app.route("/api/scan/stop", methods=["POST"])
@@ -7652,6 +7934,107 @@ def api_apis_status():
     return jsonify({"apis": results, "odds_key_pool": odds_key_pool})
 
 
+def _parse_odds_key_text(value: object) -> tuple[list[str], list[dict[str, str]]]:
+    raw_parts = re.split(r"[\s,]+", str(value or "").strip())
+    keys: list[str] = []
+    excluded: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in raw_parts:
+        normalized = normalize_odds_api_key(raw)
+        if not normalized:
+            continue
+        if not is_valid_odds_api_key(normalized):
+            excluded.append({"fingerprint": api_key_fingerprint(normalized), "reason": "invalid_format"})
+            continue
+        if normalized in seen:
+            excluded.append({"fingerprint": api_key_fingerprint(normalized), "reason": "duplicate"})
+            continue
+        seen.add(normalized)
+        keys.append(normalized)
+    return keys, excluded
+
+
+def _persist_runtime_odds_key_pool(keys: list[str]) -> None:
+    env_path = BASE / ".env"
+    unique_keys: list[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        normalized = normalize_odds_api_key(key)
+        if not is_valid_odds_api_key(normalized) or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_keys.append(normalized)
+
+    pool_value = ",".join(unique_keys)
+    set_key(str(env_path), "ODDS_API_KEYS", pool_value)
+    os.environ["ODDS_API_KEYS"] = pool_value
+
+    current_primary = normalize_odds_api_key(os.environ.get("ODDS_API_KEY", ""))
+    if unique_keys and current_primary not in unique_keys:
+        set_key(str(env_path), "ODDS_API_KEY", unique_keys[0])
+        os.environ["ODDS_API_KEY"] = unique_keys[0]
+    elif not unique_keys:
+        set_key(str(env_path), "ODDS_API_KEY", "")
+        os.environ["ODDS_API_KEY"] = ""
+    load_dotenv(env_path, override=True)
+
+
+@app.route("/api/apis/odds-keys/add", methods=["POST"])
+def api_apis_odds_keys_add():
+    data = request.get_json() or {}
+    incoming, excluded = _parse_odds_key_text(data.get("value", ""))
+    if not incoming:
+        return jsonify({"error": "No valid Odds API keys found.", "excluded": excluded}), 400
+
+    current = list(parse_odds_api_keys_from_env().get("keys") or [])
+    current_set = set(current)
+    merged: list[str] = []
+    seen: set[str] = set()
+    added: list[str] = []
+    for key in current + incoming:
+        normalized = normalize_odds_api_key(key)
+        if not is_valid_odds_api_key(normalized) or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+        if normalized in incoming and normalized not in current_set:
+            added.append(api_key_fingerprint(normalized))
+
+    _persist_runtime_odds_key_pool(merged)
+    return jsonify({
+        "ok": True,
+        "added_count": len(added),
+        "added_fingerprints": added,
+        "total_runtime_keys": len(merged),
+        "excluded": excluded,
+        "odds_key_pool": _odds_key_pool_summary(),
+    })
+
+
+@app.route("/api/apis/odds-keys/prune-exhausted", methods=["POST"])
+def api_apis_odds_keys_prune_exhausted():
+    pool = _odds_key_pool_summary()
+    exhausted_fps = {
+        str(row.get("fingerprint") or "")
+        for row in (pool.get("keys") or [])
+        if str(row.get("status") or "") == "quota_exhausted"
+    }
+    if not exhausted_fps:
+        return jsonify({"ok": True, "removed_count": 0, "removed_fingerprints": [], "odds_key_pool": pool})
+
+    current = list(parse_odds_api_keys_from_env().get("keys") or [])
+    kept = [key for key in current if api_key_fingerprint(key) not in exhausted_fps]
+    removed = [api_key_fingerprint(key) for key in current if api_key_fingerprint(key) in exhausted_fps]
+    _persist_runtime_odds_key_pool(kept)
+    return jsonify({
+        "ok": True,
+        "removed_count": len(removed),
+        "removed_fingerprints": removed,
+        "total_runtime_keys": len(kept),
+        "odds_key_pool": _odds_key_pool_summary(),
+    })
+
+
 @app.route("/api/apis/update", methods=["POST"])
 def api_apis_update():
     """Update a key in .env."""
@@ -7797,6 +8180,177 @@ def api_sources_status():
         return jsonify(source_status_summary())
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/world-cup/predict", methods=["POST"])
+def api_world_cup_predict():
+    """Run the standalone World Cup predictor CLI for one fixture."""
+    data = request.get_json(silent=True) or {}
+    model_dir = str(
+        data.get("model_dir") or os.getenv("WORLD_CUP_MODEL_DIR") or WORLD_CUP_DEFAULT_MODEL_DIR
+    ).strip()
+    team_a = str(data.get("team_a") or "").strip()
+    team_b = str(data.get("team_b") or "").strip()
+    if not model_dir or not team_a or not team_b:
+        return jsonify({"error": "model_dir, team_a, and team_b are required"}), 400
+    python_bin = str(
+        data.get("python_bin")
+        or os.getenv("WORLD_CUP_PREDICTOR_PYTHON")
+        or WORLD_CUP_DEFAULT_PYTHON
+    )
+    cmd = [
+        python_bin,
+        "-m",
+        "world_cup_predictor",
+        "predict-fixture",
+        "--model-dir",
+        model_dir,
+        "--team-a",
+        team_a,
+        "--team-b",
+        team_b,
+    ]
+    if data.get("neutral_venue", True):
+        cmd.append("--neutral-venue")
+    else:
+        cmd.append("--no-neutral-venue")
+    if data.get("host_team"):
+        cmd.extend(["--host-team", str(data["host_team"])])
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(WORLD_CUP_PROJECT_DIR / "src")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=WORLD_CUP_PROJECT_DIR,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return jsonify({"error": proc.stderr.strip() or proc.stdout.strip()}), 500
+        return jsonify(_extract_cli_json(proc.stdout))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/world-cup/teams")
+def api_world_cup_teams():
+    """Return the current World Cup tournament field used by the predictor."""
+    teams_path = Path(
+        str(request.args.get("teams") or os.getenv("WORLD_CUP_TEAMS_CSV") or WORLD_CUP_DEFAULT_TEAMS_CSV)
+    )
+    try:
+        if not teams_path.exists():
+            return jsonify({"error": f"teams CSV not found: {teams_path}"}), 404
+        frame = pd.read_csv(teams_path)
+        teams = frame.sort_values(["group", "draw_position"]).to_dict("records")
+        return jsonify(
+            {
+                "teams_path": str(teams_path),
+                "model_dir": str(os.getenv("WORLD_CUP_MODEL_DIR") or WORLD_CUP_DEFAULT_MODEL_DIR),
+                "annexe_c": str(os.getenv("WORLD_CUP_ANNEXE_C") or WORLD_CUP_DEFAULT_ANNEXE_C),
+                "teams": teams,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/world-cup/simulate", methods=["POST"])
+def api_world_cup_simulate():
+    """Run the standalone World Cup predictor CLI for tournament simulations."""
+    data = request.get_json(silent=True) or {}
+    model_dir = str(
+        data.get("model_dir") or os.getenv("WORLD_CUP_MODEL_DIR") or WORLD_CUP_DEFAULT_MODEL_DIR
+    ).strip()
+    teams = str(data.get("teams") or os.getenv("WORLD_CUP_TEAMS_CSV") or WORLD_CUP_DEFAULT_TEAMS_CSV).strip()
+    annexe_c = str(
+        data.get("annexe_c")
+        or os.getenv("WORLD_CUP_ANNEXE_C")
+        or WORLD_CUP_DEFAULT_ANNEXE_C
+    ).strip()
+    if not model_dir or not teams or not annexe_c:
+        return jsonify({"error": "model_dir, teams, and annexe_c are required"}), 400
+    python_bin = str(
+        data.get("python_bin")
+        or os.getenv("WORLD_CUP_PREDICTOR_PYTHON")
+        or WORLD_CUP_DEFAULT_PYTHON
+    )
+    output_root = str(
+        data.get("output_root")
+        or os.getenv("WORLD_CUP_OUTPUT_ROOT")
+        or "/private/tmp/wcp_webapp_tournament"
+    )
+    simulations = int(data.get("simulations") or 1000)
+    seed = int(data.get("seed") or 2026)
+    cmd = [
+        python_bin,
+        "-m",
+        "world_cup_predictor",
+        "simulate-tournament",
+        "--teams",
+        teams,
+        "--annexe-c",
+        annexe_c,
+        "--model-dir",
+        model_dir,
+        "--output-root",
+        output_root,
+        "--simulations",
+        str(simulations),
+        "--seed",
+        str(seed),
+    ]
+    if data.get("extra_time_goal_fraction") is not None:
+        cmd.extend(["--extra-time-goal-fraction", str(data["extra_time_goal_fraction"])])
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(WORLD_CUP_PROJECT_DIR / "src")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=WORLD_CUP_PROJECT_DIR,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=180,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return jsonify({"error": proc.stderr.strip() or proc.stdout.strip()}), 500
+        payload = _extract_cli_json(proc.stdout)
+        payload.update(_load_world_cup_simulation_outputs(payload))
+        return jsonify(payload)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+def _load_world_cup_simulation_outputs(payload: dict[str, Any]) -> dict[str, Any]:
+    loaded: dict[str, Any] = {}
+    try:
+        summary_path = payload.get("summary_path")
+        if summary_path and Path(summary_path).exists():
+            loaded["summary"] = json.loads(Path(summary_path).read_text())
+        probabilities_path = payload.get("team_probabilities_path")
+        if probabilities_path and Path(probabilities_path).exists():
+            frame = pd.read_parquet(probabilities_path)
+            top = (
+                frame.sort_values(["champion_probability", "team_name"], ascending=[False, True])
+                .head(16)
+                .to_dict("records")
+            )
+            loaded["top_probabilities"] = top
+    except Exception as exc:
+        loaded["output_warning"] = str(exc)
+    return loaded
+
+
+def _extract_cli_json(output: str) -> dict[str, Any]:
+    start = output.find("{")
+    if start < 0:
+        raise ValueError("CLI did not return JSON")
+    return json.loads(output[start:])
 
 
 @app.route("/api/quota/sync-legacy")

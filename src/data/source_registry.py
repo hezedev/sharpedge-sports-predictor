@@ -112,6 +112,30 @@ _PROVIDER_DEFINITIONS: tuple[SourceProvider, ...] = (
         notes="Good NBA historical source; not enough by itself for injury decisions.",
     ),
     SourceProvider(
+        key="mlb_stats_api",
+        name="MLB Stats API",
+        category="availability",
+        sports=("mlb",),
+        evidence=("schedule", "probable_pitchers", "official_lineups", "venue", "game_status", "pitcher_stats"),
+        env_vars=(),
+        reliability="structured_keyless",
+        cost_tier="free",
+        priority=13,
+        notes="No key required. Primary MLB game-day evidence source for probable pitchers, posted batting orders, venue, and game status.",
+    ),
+    SourceProvider(
+        key="balldontlie_mlb",
+        name="BallDontLie MLB",
+        category="historical_stats",
+        sports=("mlb",),
+        evidence=("games", "teams", "players", "stats", "lineups", "probable_pitchers"),
+        env_vars=("BALLDONTLIE_API_KEY",),
+        reliability="structured",
+        cost_tier="free_or_paid",
+        priority=30,
+        notes="Useful MLB companion for historical stats and lineup/probable-pitcher coverage when quota allows.",
+    ),
+    SourceProvider(
         key="nhl_public_api",
         name="NHL Public API",
         category="availability",
@@ -171,6 +195,18 @@ _PROVIDER_DEFINITIONS: tuple[SourceProvider, ...] = (
         priority=36,
         notes="Useful for MLB weather/park risk and outdoor soccer/tennis context.",
     ),
+    SourceProvider(
+        key="open_meteo",
+        name="Open-Meteo",
+        category="environment",
+        sports=("mlb", "soccer", "tennis"),
+        evidence=("weather", "wind", "temperature", "precipitation"),
+        env_vars=(),
+        reliability="structured_keyless",
+        cost_tier="free",
+        priority=37,
+        notes="No key required. Used as the default weather fallback when OpenWeatherMap is not configured.",
+    ),
 )
 
 
@@ -211,7 +247,7 @@ def source_status_summary(env: Mapping[str, str] | None = None) -> dict:
         "soccer": ("api_sports_football", "rapidapi_football"),
         "basketball": ("api_sports_basketball",),
         "nhl": ("nhl_public_api",),
-        "mlb": (),
+        "mlb": ("mlb_stats_api",),
         "tennis": (),
     }
     for sport, alternatives in critical_requirements.items():
@@ -244,6 +280,8 @@ def _recommendations(providers: list[SourceProvider]) -> list[str]:
         notes.append("Add API_SPORTS_KEY to improve NBA injury/availability checks.")
     if "balldontlie" not in configured:
         notes.append("Add BALLDONTLIE_API_KEY for stronger NBA historical box-score coverage.")
+    if "balldontlie_mlb" not in configured:
+        notes.append("Optional: BALLDONTLIE_API_KEY also strengthens MLB historical stats and lineup/probable-pitcher fallbacks.")
     if "odds_api" not in configured:
         notes.append("Add ODDS_API_KEY or ODDS_API_KEYS before live market scans.")
     if "newsapi" not in configured:

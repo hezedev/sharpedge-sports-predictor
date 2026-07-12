@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import os
@@ -278,6 +279,92 @@ class _MLBLiveAvailabilityEnricher:
         resp.raise_for_status()
         return resp.json()
 
+    @staticmethod
+    def _match_score(left: str, right: str) -> float:
+        l_norm = _normalize_name(left)
+        r_norm = _normalize_name(right)
+        if not l_norm or not r_norm:
+            return 0.0
+        if l_norm == r_norm:
+            return 1.0
+        # Same-city rivals (e.g. "New York Yankees" vs "New York Mets", "Los
+        # Angeles Angels" vs "Los Angeles Dodgers") can score deceptively high
+        # on generic string similarity, so require the mascot/nickname (last
+        # token) to match before accepting a fuzzy match at all.
+        l_tokens = l_norm.split()
+        r_tokens = r_norm.split()
+        if l_tokens and r_tokens and l_tokens[-1] != r_tokens[-1]:
+            return 0.0
+        if l_norm in r_norm or r_norm in l_norm:
+            return 0.92
+        return difflib.SequenceMatcher(None, l_norm, r_norm).ratio()
+
+    @staticmethod
+    def _pitcher_hand(player: dict[str, Any]) -> str:
+        hand = player.get("pitchHand") or {}
+        if isinstance(hand, dict):
+            return str(hand.get("code") or hand.get("description") or "").strip()
+        return str(hand or "").strip()
+
+    def _pitcher_stats(self, pitcher_id: Any, season: int) -> dict[str, Any]:
+        if not pitcher_id:
+            return {}
+        try:
+            payload = self._get_json(
+                f"people/{int(pitcher_id)}/stats",
+                {"stats": "season", "group": "pitching", "season": str(season)},
+            )
+        except Exception as exc:
+            logger.debug("MLB pitcher stat lookup failed for %s: %s", pitcher_id, exc)
+            return {}
+        stats_list = payload.get("stats") or [{}]
+        splits = (stats_list[0] or {}).get("splits", [])
+        stat = (splits[0].get("stat") or {}) if splits else {}
+        return {
+            "era": _as_float(stat.get("era"), 4.50),
+            "whip": _as_float(stat.get("whip"), 1.30),
+            "k9": _as_float(stat.get("strikeoutsPer9Inn"), 8.0),
+            "bb9": _as_float(stat.get("walksPer9Inn"), 3.0),
+            "ip": _as_float(stat.get("inningsPitched"), 0.0),
+            "games_started": int(_as_float(stat.get("gamesStarted"), 0.0)),
+        }
+
+    def _game_feed(self, game_pk: Any) -> dict[str, Any]:
+        if not game_pk:
+            return {}
+        try:
+            return self._get_json(f"game/{int(game_pk)}/feed/live", {})
+        except Exception as exc:
+            logger.debug("MLB live game feed failed for %s: %s", game_pk, exc)
+            return {}
+
+    @staticmethod
+    def _extract_batting_order(feed: dict[str, Any], side: str) -> list[str]:
+        box = (((feed.get("liveData") or {}).get("boxscore") or {}).get("teams") or {}).get(side) or {}
+        batting_order = box.get("battingOrder") or []
+        players = box.get("players") or {}
+        names: list[str] = []
+        for raw_id in batting_order:
+            key = f"ID{raw_id}"
+            player = (players.get(key) or {}).get("person") or {}
+            name = str(player.get("fullName") or "").strip()
+            if name:
+                names.append(name)
+        return names
+
+    @staticmethod
+    def _snapshot_starter_name(snapshot: Any, side: str) -> str:
+        if snapshot is None:
+            return ""
+        for key in (f"{side}_starter_name", f"{side}_pitcher_name"):
+            try:
+                value = snapshot.get(key)
+            except Exception:
+                value = None
+            if value:
+                return str(value).strip()
+        return ""
+
     def fetch_match_availability(self, home_team: str, away_team: str, commence: Any) -> dict[str, Any]:
         target_date = self._coerce_date(commence)
         try_dates = [target_date]
@@ -297,7 +384,7 @@ class _MLBLiveAvailabilityEnricher:
                         "sportId": 1,
                         "startDate": date_str,
                         "endDate": date_str,
-                        "hydrate": "probablePitcher",
+                        "hydrate": "probablePitcher,venue",
                     },
                 )
             except Exception as exc:
@@ -311,18 +398,53 @@ class _MLBLiveAvailabilityEnricher:
                     away = teams.get("away", {})
                     game_home = _normalize_name(((home.get("team") or {}).get("name")) or "")
                     game_away = _normalize_name(((away.get("team") or {}).get("name")) or "")
-                    if game_home != home_norm or game_away != away_norm:
+                    if self._match_score(game_home, home_norm) < 0.72 or self._match_score(game_away, away_norm) < 0.72:
                         continue
                     home_pitcher = home.get("probablePitcher") or {}
                     away_pitcher = away.get("probablePitcher") or {}
-                    return {
+                    game_pk = game.get("gamePk")
+                    season = int(str(date_str)[:4])
+                    home_pitcher_id = home_pitcher.get("id")
+                    away_pitcher_id = away_pitcher.get("id")
+                    home_stats = self._pitcher_stats(home_pitcher_id, season)
+                    away_stats = self._pitcher_stats(away_pitcher_id, season)
+                    feed = self._game_feed(game_pk)
+                    home_lineup = self._extract_batting_order(feed, "home")
+                    away_lineup = self._extract_batting_order(feed, "away")
+                    venue = game.get("venue") or {}
+                    result = {
+                        "game_pk": game_pk,
+                        "game_status": str((game.get("status") or {}).get("detailedState") or ""),
+                        "game_start_time": str(game.get("gameDate") or ""),
+                        "venue_name": str(venue.get("name") or ""),
                         "home_starter_confirmed": 1 if home_pitcher.get("id") else 0,
                         "away_starter_confirmed": 1 if away_pitcher.get("id") else 0,
                         "home_starter_name": str(home_pitcher.get("fullName") or home_pitcher.get("full_name") or ""),
                         "away_starter_name": str(away_pitcher.get("fullName") or away_pitcher.get("full_name") or ""),
+                        "home_starter_hand": self._pitcher_hand(home_pitcher),
+                        "away_starter_hand": self._pitcher_hand(away_pitcher),
+                        "home_starter_era": home_stats.get("era"),
+                        "home_starter_whip": home_stats.get("whip"),
+                        "home_starter_k9": home_stats.get("k9"),
+                        "home_starter_bb9": home_stats.get("bb9"),
+                        "home_starter_ip": home_stats.get("ip"),
+                        "home_starter_games_started": home_stats.get("games_started"),
+                        "away_starter_era": away_stats.get("era"),
+                        "away_starter_whip": away_stats.get("whip"),
+                        "away_starter_k9": away_stats.get("k9"),
+                        "away_starter_bb9": away_stats.get("bb9"),
+                        "away_starter_ip": away_stats.get("ip"),
+                        "away_starter_games_started": away_stats.get("games_started"),
+                        "home_likely_starters_count": len(home_lineup),
+                        "away_likely_starters_count": len(away_lineup),
+                        "home_lineup_confirmed": 1 if len(home_lineup) >= 9 else 0,
+                        "away_lineup_confirmed": 1 if len(away_lineup) >= 9 else 0,
+                        "home_lineup_players": home_lineup[:9],
+                        "away_lineup_players": away_lineup[:9],
                         "availability_source": "mlb_stats_api",
                         "lineup_source": "mlb_stats_api",
                     }
+                    return {k: v for k, v in result.items() if v not in (None, "")}
         return {}
 
 
@@ -435,6 +557,13 @@ def build_availability_context(
             )
             if live_context:
                 context.update({k: v for k, v in live_context.items() if v not in (None, "")})
+        for side in ("home", "away"):
+            expected = _MLBLiveAvailabilityEnricher._snapshot_starter_name(snapshot, side)
+            live = str(context.get(f"{side}_starter_name") or "").strip()
+            if expected and live and _MLBLiveAvailabilityEnricher._match_score(expected, live) < 0.75:
+                context[f"{side}_pitcher_changed"] = 1
+                context["pitcher_change_detected"] = 1
+                context.setdefault("pitcher_change_note", f"{side} starter changed from {expected} to {live}")
         return context
 
     if sport in {"basketball", "nhl"}:

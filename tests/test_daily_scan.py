@@ -274,6 +274,36 @@ def test_fetch_odds_force_fresh_bypasses_cache_layers(monkeypatch) -> None:
     assert games == [{"id": "fresh", "commence_time": "2099-01-01T12:00:00Z", "bookmakers": []}]
 
 
+def test_fetch_odds_force_fresh_reuses_current_run_live_payload(monkeypatch) -> None:
+    now = daily_scan.datetime.now()
+    live_payload = [
+        {
+            "id": "fresh",
+            "commence_time": "2099-01-01T12:00:00Z",
+            "bookmakers": [{"markets": [{"key": "spreads", "outcomes": []}]}],
+        }
+    ]
+
+    monkeypatch.setattr(daily_scan, "ODDS_KEY", "test-key")
+    monkeypatch.setattr(daily_scan, "_FORCE_FRESH_ODDS", True)
+    monkeypatch.setattr(daily_scan, "_OFFLINE_ODDS_ONLY", False)
+    monkeypatch.setattr(daily_scan, "_odds_cache", {"baseball_mlb": (now, live_payload)})
+    monkeypatch.setattr(daily_scan, "_force_fresh_live_fetch_sports", {"baseball_mlb"})
+    monkeypatch.setattr(
+        daily_scan,
+        "_fetch_odds_raw",
+        lambda _sport_key: (_ for _ in ()).throw(AssertionError("current-run live payload should be reused")),
+    )
+    monkeypatch.setattr(daily_scan, "_future_windowed_games", lambda games: games)
+
+    games = daily_scan.fetch_odds("baseball_mlb", markets="spreads")
+
+    assert len(games) == 1
+    assert games[0]["id"] == "fresh"
+    assert games[0]["_odds_source_status"] == "fresh_run_cache"
+    assert games[0]["_odds_source_reason"] == "force_fresh_reused_current_run_fetch"
+
+
 def test_fetch_odds_force_fresh_reports_why_fallback_was_used(monkeypatch) -> None:
     sample_game = {
         "id": "match-1",
@@ -307,6 +337,83 @@ def test_fetch_odds_force_fresh_reports_why_fallback_was_used(monkeypatch) -> No
     assert games[0]["_odds_force_fresh_requested"] is True
     assert "force_fresh_requested" in games[0]["_odds_source_reason"]
     assert games[0]["_odds_source_detail"] == "fallback_odds_used_because_force_fresh_fetch_could_not_complete"
+
+
+def test_fetch_odds_force_fresh_falls_back_to_saved_odds_on_live_fetch_error(monkeypatch) -> None:
+    sample_game = {
+        "id": "match-1",
+        "commence_time": "2099-01-01T12:00:00Z",
+        "bookmakers": [{"markets": [{"key": "h2h", "outcomes": []}]}],
+    }
+    loaded_at = datetime(2099, 1, 1, 9, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(daily_scan, "ODDS_KEY", "test-key")
+    monkeypatch.setattr(daily_scan, "_FORCE_FRESH_ODDS", True)
+    monkeypatch.setattr(daily_scan, "_OFFLINE_ODDS_ONLY", False)
+    monkeypatch.setattr(daily_scan, "_odds_cache", {})
+    monkeypatch.setattr(daily_scan, "_force_fresh_live_fetch_sports", set())
+    monkeypatch.setattr(daily_scan, "_check_budget", lambda priority="high": True)
+    monkeypatch.setattr(daily_scan, "_fetch_odds_raw", lambda _sport_key: (_ for _ in ()).throw(RuntimeError("dns failed")))
+    monkeypatch.setattr(
+        daily_scan,
+        "_load_disk_cache_bundle",
+        lambda _sport_key: ([sample_game], {"cache_loaded_at": loaded_at, "cache_age_hours": 2.5, "cache_kind": "stable"}),
+    )
+    monkeypatch.setattr(daily_scan, "_disk_cache_age_hours", lambda _sport_key: 2.5)
+    monkeypatch.setattr(daily_scan, "_future_windowed_games", lambda games: games)
+
+    games = daily_scan.fetch_odds("baseball_mlb")
+
+    assert games[0]["id"] == "match-1"
+    assert games[0]["_odds_source_status"] == "stale_fallback"
+    assert games[0]["_odds_fallback_used"] is True
+    assert games[0]["_odds_force_fresh_requested"] is True
+    assert games[0]["_odds_source_reason"] == "force_fresh_requested_but_live_fetch_failed"
+
+
+def test_write_report_merges_single_sport_summary_without_erasing_other_sports(tmp_path, monkeypatch) -> None:
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    summary_path = reports_dir / f"summary_{daily_scan.TODAY}.json"
+    summary_path.write_text(json.dumps({
+        "date": daily_scan.TODAY,
+        "single_bets": {
+            "total": 1,
+            "review_total": 1,
+            "suppressed_total": 0,
+            "bankroll_blocked_total": 0,
+            "bets": [{"sport": "soccer", "team": "Arsenal", "edge": 0.04}],
+            "review_bets": [{"sport": "soccer", "team": "Chelsea", "review_reason": "lineups"}],
+            "suppressed_bets": [],
+            "bankroll_blocked_bets": [],
+        },
+        "soccer_games": [{"sport": "soccer", "home": "A", "away": "B"}],
+        "other_games": [{"sport": "nhl", "home": "Rangers", "away": "Bruins"}],
+        "sport_pipeline_diagnostics": {
+            "by_sport": {"soccer": {"scanned_games": 1}, "nhl": {"scanned_games": 1}},
+            "totals": {"scanned_games": 2},
+        },
+    }))
+    monkeypatch.setattr(daily_scan, "REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(daily_scan, "_soccer_full_games", [])
+    monkeypatch.setattr(daily_scan, "_other_sport_games", [{"sport": "mlb", "home": "Yankees", "away": "Red Sox"}])
+    monkeypatch.setattr(daily_scan, "_scan_runtime_notes", [])
+
+    daily_scan.write_report(
+        [{"sport": "mlb", "team": "Yankees", "home": "Yankees", "away": "Red Sox", "edge": 0.05, "odds": 1.9, "ml_prob": 0.56, "fair_prob": 0.51, "kelly_stake_pct": 1.0}],
+        review_bets=[],
+        suppressed_bets=[],
+        bankroll_blocked_bets=[],
+        bankroll=1000,
+        scan_sport="mlb",
+    )
+
+    merged = json.loads(summary_path.read_text())
+    assert {bet["sport"] for bet in merged["single_bets"]["bets"]} == {"soccer", "mlb"}
+    assert merged["soccer_games"] == [{"sport": "soccer", "home": "A", "away": "B"}]
+    assert {game["sport"] for game in merged["other_games"]} == {"nhl", "mlb"}
+    assert "soccer" in merged["sport_pipeline_diagnostics"]["by_sport"]
+    assert "mlb" in merged["sport_pipeline_diagnostics"]["by_sport"]
 
 
 def test_with_candidate_odds_diagnostics_inherits_source_timestamp_for_synthetic_market() -> None:
@@ -440,6 +547,23 @@ def test_select_odds_api_key_avoids_low_quota_when_healthier_key_exists(tmp_path
     assert selected == "healthy-key-22222222"
     assert payload["_meta"]["last_selected_fingerprint"] == "22222222"
     assert payload["_meta"]["last_selected_reason"] == "selected highest remaining runtime-available key"
+
+
+def test_select_odds_api_key_excludes_exhausted_runtime_key(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ODDS_API_KEY", "empty-key-11111111")
+    monkeypatch.setenv("ODDS_API_KEYS", "empty-key-11111111,backup-key-22222222")
+    monkeypatch.setattr(daily_scan, "_ODDS_KEY_POOL_FILE", tmp_path / "odds_key_pool.json")
+    daily_scan._save_odds_key_pool_usage({
+        "11111111": {"fingerprint": "11111111", "remaining": 0},
+        "22222222": {"fingerprint": "22222222", "remaining": 120},
+    })
+
+    selected = daily_scan._select_odds_api_key()
+    payload = daily_scan._load_odds_key_pool_usage()
+
+    assert selected == "backup-key-22222222"
+    assert payload["_meta"]["last_selected_fingerprint"] == "22222222"
+    assert any(item["reason"] == "quota_exhausted" for item in payload["_meta"]["excluded_details"])
 
 
 def test_select_odds_api_key_excludes_tracked_key_missing_raw_runtime_key(tmp_path, monkeypatch, caplog) -> None:
@@ -631,6 +755,7 @@ def test_handle_odds_api_auth_failure_enters_degraded_mode_without_fallback(monk
 
 
 def test_select_soccer_live_scope_defers_cold_review_leagues_when_quota_is_tight(monkeypatch) -> None:
+    monkeypatch.setenv("SCAN_CONSERVE_SOCCER_SCOPE", "1")
     monkeypatch.setattr(
         daily_scan,
         "get_odds_budget_status",
@@ -656,6 +781,7 @@ def test_select_soccer_live_scope_defers_cold_review_leagues_when_quota_is_tight
 
 
 def test_select_soccer_live_scope_keeps_review_leagues_when_quota_is_healthy(monkeypatch) -> None:
+    monkeypatch.setenv("SCAN_CONSERVE_SOCCER_SCOPE", "1")
     monkeypatch.setattr(
         daily_scan,
         "get_odds_budget_status",
@@ -680,6 +806,18 @@ def test_select_soccer_live_scope_keeps_review_leagues_when_quota_is_healthy(mon
     assert deferred == ["soccer_finland_veikkausliiga"]
 
 
+def test_select_soccer_live_scope_defaults_to_all_active_leagues(monkeypatch) -> None:
+    monkeypatch.delenv("SCAN_CONSERVE_SOCCER_SCOPE", raising=False)
+    monkeypatch.delenv("SCAN_FULL_SOCCER_SCOPE", raising=False)
+
+    selected, deferred = daily_scan._select_soccer_live_scope(
+        ["soccer_epl", "soccer_finland_veikkausliiga", "soccer_mexico_ligamx"]
+    )
+
+    assert selected == ["soccer_epl", "soccer_finland_veikkausliiga", "soccer_mexico_ligamx"]
+    assert deferred == []
+
+
 def test_select_soccer_live_scope_full_override_keeps_all_leagues(monkeypatch) -> None:
     monkeypatch.setenv("SCAN_FULL_SOCCER_SCOPE", "1")
 
@@ -689,6 +827,21 @@ def test_select_soccer_live_scope_full_override_keeps_all_leagues(monkeypatch) -
 
     assert selected == ["soccer_epl", "soccer_finland_veikkausliiga", "soccer_mexico_ligamx"]
     assert deferred == []
+
+
+def test_active_soccer_match_keys_include_unregistered_active_leagues(monkeypatch) -> None:
+    monkeypatch.setattr(daily_scan, "soccer_scanable_keys", lambda: ["soccer_epl"])
+
+    selected, skipped, discovered = daily_scan._active_soccer_match_keys({
+        "soccer_epl",
+        "soccer_chile_campeonato",
+        "soccer_fifa_world_cup_winner",
+        "baseball_mlb",
+    })
+
+    assert selected == ["soccer_chile_campeonato", "soccer_epl"]
+    assert skipped == ["soccer_fifa_world_cup_winner"]
+    assert discovered == ["soccer_chile_campeonato"]
 
 
 def test_sport_pipeline_diagnostics_tracks_no_candidate_reasons() -> None:
@@ -2205,6 +2358,35 @@ def test_context_adjustments_apply_mlb_matchup_and_motivation_proxies() -> None:
     assert any(item.name == "starter_form_synergy" and item.value > 0 for item in adjustments)
     assert any(item.name == "venue_split_edge" and item.value > 0 for item in adjustments)
     assert any(item.name == "streak_pressure" and item.value > 0 for item in adjustments)
+
+
+def test_context_adjustments_apply_mlb_bullpen_and_park_context() -> None:
+    snapshot = pd.Series(
+        {
+            "home_games_L3D": 1,
+            "away_games_L3D": 3,
+            "home_run_diff_10": 1.8,
+            "away_run_diff_10": -0.4,
+        }
+    )
+    adjustments = daily_scan._context_adjustments(
+        "mlb",
+        "home",
+        snapshot,
+        {
+            "home_games_L3D": 1,
+            "away_games_L3D": 3,
+            "bullpen_fatigue_risk": True,
+            "park_factor_proxy": 1.08,
+            "park_run_environment": "hitter_friendly",
+        },
+    )
+    names = {item.name for item in adjustments}
+
+    assert "bullpen_workload" in names
+    assert "bullpen_fatigue_risk" in names
+    assert "park_factor" in names
+    assert any(item.name == "bullpen_workload" and item.value > 0 for item in adjustments)
 
 
 def test_context_adjustments_apply_soccer_availability_signal() -> None:

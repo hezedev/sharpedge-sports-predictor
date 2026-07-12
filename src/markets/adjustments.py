@@ -421,6 +421,9 @@ def build_context_adjustments(
         away_unknown = int(_as_float(snapshot.get("away_sp_unknown"), 0))
         home_b2b = int(_as_float(snapshot.get("home_b2b"), 0))
         away_b2b = int(_as_float(snapshot.get("away_b2b"), 0))
+        home_games_l3d = _as_float(context.get("home_games_L3D", snapshot.get("home_games_L3D")), 0.0)
+        away_games_l3d = _as_float(context.get("away_games_L3D", snapshot.get("away_games_L3D")), 0.0)
+        park_factor = _as_float(context.get("park_factor_proxy"), 0.0)
 
         starter_edge = max(-0.02, min(0.02, (-era_diff * 0.012) + (-whip_diff * 0.025)))
         if direction != 0.0 and starter_edge:
@@ -502,6 +505,25 @@ def build_context_adjustments(
                     summary="Pitcher command and bat-missing edge from K/9 and BB/9 differential.",
                 )
             )
+        bullpen_edge = max(-0.018, min(0.018, (away_games_l3d - home_games_l3d) * 0.006))
+        if direction != 0.0 and abs(bullpen_edge) >= 0.003:
+            adjustments.append(
+                PredictionFactor(
+                    name="bullpen_workload",
+                    category="schedule",
+                    value=round(bullpen_edge * direction, 3),
+                    summary="Bullpen workload proxy from each team's games played over the last three days.",
+                )
+            )
+        if context.get("bullpen_fatigue_risk"):
+            adjustments.append(
+                PredictionFactor(
+                    name="bullpen_fatigue_risk",
+                    category="schedule",
+                    value=0.0,
+                    summary="One or both bullpens are in a compressed recent workload spot.",
+                )
+            )
         matchup_edge = max(
             -0.012,
             min(0.012, ((home_run_form - away_run_form) * 0.0025) + ((-era_diff) * 0.004)),
@@ -513,6 +535,19 @@ def build_context_adjustments(
                     category="matchup",
                     value=round(matchup_edge * direction, 3),
                     summary="Starter-vs-form synergy adjustment from recent run differential and probable pitcher quality.",
+                )
+            )
+        if park_factor:
+            park_edge = max(-0.006, min(0.006, (park_factor - 1.0) * (home_run_form - away_run_form) * 0.004))
+            adjustments.append(
+                PredictionFactor(
+                    name="park_factor",
+                    category="environment",
+                    value=round(park_edge * direction, 3) if direction != 0.0 else 0.0,
+                    summary=(
+                        f"Park run-environment proxy checked ({context.get('park_run_environment', 'neutral')}, "
+                        f"factor {park_factor:.3f})."
+                    ),
                 )
             )
         venue_edge = max(-0.01, min(0.01, (home_home_wpct - away_away_wpct) * 0.03))

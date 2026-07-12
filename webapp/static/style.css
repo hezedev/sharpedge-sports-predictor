@@ -215,6 +215,132 @@ body {
 .game-row-value.no-value { background: transparent; }
 /* ─────────────────────────────────────────────────────────── */
 
+/* ── World Cup Predictor ─────────────────────────────────── */
+.wc-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.wc-form-grid select,
+.wc-form-grid input {
+  width: 100%;
+  background: rgba(148,163,184,.08);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: .85rem;
+}
+.wc-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.wc-check {
+  color: var(--text2);
+  font-size: .82rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.wc-result-box {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  border-radius: var(--r);
+  padding: 14px;
+  color: var(--text2);
+  font-size: .85rem;
+  min-height: 54px;
+}
+.wc-match-title {
+  color: var(--text);
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.wc-prob-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.wc-prob-grid div {
+  background: rgba(15,23,42,.55);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 10px;
+}
+.wc-prob-grid span {
+  display: block;
+  color: var(--accent);
+  font-weight: 800;
+  font-size: 1.1rem;
+}
+.wc-prob-grid small {
+  display: block;
+  color: var(--text3);
+  margin-top: 3px;
+  line-height: 1.25;
+}
+.wc-score-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.wc-score-chip {
+  border: 1px solid var(--border);
+  background: rgba(16,185,129,.08);
+  color: var(--green);
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: .78rem;
+}
+.wc-groups-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.wc-group-card {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 12px;
+}
+.wc-group-title {
+  color: var(--text);
+  font-weight: 700;
+  margin-bottom: 8px;
+  font-size: .86rem;
+}
+.wc-team-row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 0;
+  border-top: 1px solid rgba(148,163,184,.08);
+  font-size: .8rem;
+}
+.wc-team-row:first-of-type { border-top: none; }
+.wc-team-row span,
+.wc-team-row em {
+  color: var(--text3);
+  font-style: normal;
+  font-size: .74rem;
+}
+@media (max-width: 980px) {
+  .wc-groups-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .wc-form-grid,
+  .wc-prob-grid,
+  .wc-groups-grid { grid-template-columns: 1fr; }
+}
+
 .bet-card {
   background:
     linear-gradient(180deg, rgba(26,34,54,.96), rgba(17,24,39,.98));
@@ -616,6 +742,12 @@ body {
 }
 .chip:hover { border-color: rgba(59,130,246,.28); color: var(--text); transform: translateY(-1px); }
 .chip.active { background: linear-gradient(180deg, rgba(59,130,246,.24), rgba(29,78,216,.16)); border-color: rgba(59,130,246,.55); color: #dbeafe; }
+.chip:disabled,
+.chip[aria-disabled="true"] {
+  opacity: .45;
+  cursor: not-allowed;
+  transform: none;
+}
 .chip-divider { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
 
 .picks-summary {

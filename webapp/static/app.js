@@ -3,7 +3,7 @@
 // ═══════════════════════════════════════════════════════════
 const state = {
   currentPage: 'dashboard',
-  filters: { sport: 'all', market: 'all', policy: 'all', window: 'all', context: 'all', date: '' },
+  filters: { sport: 'all', sports: [], market: 'all', policy: 'all', window: 'all', context: 'all', date: '' },
   picksSort: 'confidence',
   allGames: [],
   scanSports: [],
@@ -13,7 +13,7 @@ const state = {
   scanForceFreshOdds: false,
   scanLeanContext: false,
   scanContextReferee: false,
-  scanFullSoccerScope: false,
+  scanFullSoccerScope: true,
   soccerGames: [],
   soccerSelected: new Set(),
   parlayLegs: [],
@@ -41,6 +41,8 @@ const state = {
   selectedReplaySlateDate: null,
   selectedParlayCohort: null,
   activePicksSummaryDate: '',
+  worldCupTeams: [],
+  worldCupMeta: null,
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -56,7 +58,7 @@ function showPage(page, triggerEl) {
   const titles = {
     dashboard: 'Dashboard', picks: 'Picks Board', parlays: 'Parlay Desk',
     performance: 'Performance', results: 'Results Desk',
-    reasoning: 'Reasoning', scan: 'Run Scan', apis: 'API Manager',
+    reasoning: 'Reasoning', worldcup: 'World Cup Predictor', scan: 'Run Scan', apis: 'API Manager',
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   state.currentPage = page;
@@ -71,8 +73,9 @@ function showPage(page, triggerEl) {
   if (page === 'parlays')     loadParlays();
   if (page === 'performance') loadPerformance();
   if (page === 'reasoning')   loadReasoningCandidates();
+  if (page === 'worldcup')    loadWorldCupPage();
   if (page === 'apis')        loadApis();
-  if (page === 'scan')        { loadScanApiUsage(); checkScanStatus(); }
+  if (page === 'scan')        { syncScanOptionAvailability(); loadScanApiUsage(); checkScanStatus(); }
 }
 
 // ── Mobile sidebar ────────────────────────────────────────────
@@ -439,6 +442,17 @@ function renderScanNotes(notes) {
           ${preview ? `<div style="margin-top:4px;color:var(--text3);font-size:.74rem">Deferred: ${escapeHtml(preview + suffix)}</div>` : ''}
         </div>`;
     }
+    if (note.type === 'discovered_soccer_leagues') {
+      const leagues = Array.isArray(note.leagues) ? note.leagues : [];
+      const preview = leagues.slice(0, 6).join(', ');
+      const suffix = leagues.length > 6 ? ' …' : '';
+      return `
+        <div class="review-info-item">
+          <span class="review-info-tag limited">Discovered</span>
+          ${escapeHtml(note.reason || 'Active soccer markets discovered from the odds feed were scanned as review-only coverage.')}
+          ${preview ? `<div style="margin-top:4px;color:var(--text3);font-size:.74rem">Leagues: ${escapeHtml(preview + suffix)}</div>` : ''}
+        </div>`;
+    }
     return `
       <div class="review-info-item">
         <span class="review-info-tag stale">Scan note</span>
@@ -492,7 +506,12 @@ function updatePicksSummaryCopy() {
 // ═══════════════════════════════════════════════════════════
 async function loadPicks() {
   const params = new URLSearchParams();
-  if (state.filters.sport !== 'all') params.append('sport', state.filters.sport);
+  const selectedSports = Array.isArray(state.filters.sports) ? state.filters.sports : [];
+  if (selectedSports.length) {
+    selectedSports.forEach(sport => params.append('sport', sport));
+  } else if (state.filters.sport !== 'all') {
+    params.append('sport', state.filters.sport);
+  }
   if (state.filters.market !== 'all') params.append('market', state.filters.market);
   if (state.filters.window !== 'all') params.append('window', state.filters.window);
   if (state.filters.date) params.append('date', state.filters.date);
@@ -505,7 +524,7 @@ async function loadPicks() {
   loadAllGames();
 
   // Soccer detail panel stays folded until the user opens it
-  const showSoccer = state.filters.sport === 'all' || state.filters.sport === 'soccer';
+  const showSoccer = selectedSports.length ? selectedSports.includes('soccer') : state.filters.sport === 'all' || state.filters.sport === 'soccer';
   const soccerSection = document.getElementById('soccer-games-section');
   soccerSection.style.display = showSoccer ? 'block' : 'none';
   if (!showSoccer) soccerSection.classList.remove('open');
@@ -751,7 +770,12 @@ function renderMarketPolicy(policy, focusedLanes) {
 
 async function loadAllGames() {
   const params = new URLSearchParams();
-  if (state.filters.sport !== 'all') params.append('sport', state.filters.sport);
+  const selectedSports = Array.isArray(state.filters.sports) ? state.filters.sports : [];
+  if (selectedSports.length) {
+    selectedSports.forEach(sport => params.append('sport', sport));
+  } else if (state.filters.sport !== 'all') {
+    params.append('sport', state.filters.sport);
+  }
   if (state.filters.market !== 'all') params.append('market', state.filters.market);
   if (state.filters.window !== 'all') params.append('window', state.filters.window);
   if (state.filters.date) params.append('date', state.filters.date);
@@ -938,6 +962,35 @@ function renderAllGames(games) {
             return `Model check · classifier ${fmtProb(mlbProbDebug.classifier_probs?.[pickKey])} · structural ${fmtProb(mlbProbDebug.structural_probs?.[pickKey])} · final ${fmtProb(mlbProbDebug.final_probs?.[pickKey])} · market ${fmtProb(mlbProbDebug.market_probs?.[pickKey])}${regime}${gap}`;
           })()
         : '';
+      const boardStatus = String(g.board_status || 'no_candidate');
+      const boardLabels = {
+        published: 'On board',
+        review: 'Review',
+        suppressed: 'Suppressed',
+        bankroll_blocked: 'Stake blocked',
+        no_candidate: 'Passed',
+      };
+      const boardClass = boardStatus === 'published'
+        ? 'production'
+        : boardStatus === 'review' || boardStatus === 'bankroll_blocked'
+          ? 'limited'
+          : 'review';
+      const bestCandidate = g.best_candidate || {};
+      const fmtSignedPct = (v) => {
+        if (v === null || v === undefined || v === '') return '';
+        const n = Number(v);
+        return Number.isFinite(n) ? `${n >= 0 ? '+' : ''}${(n * 100).toFixed(1)}pp` : '';
+      };
+      const blockerParts = Array.isArray(g.missing_to_promote) ? g.missing_to_promote.slice(0, 3) : [];
+      const boardReason = String(g.board_reason || '').trim();
+      const boardSummaryBits = [];
+      if (bestCandidate.team) boardSummaryBits.push(String(bestCandidate.team));
+      if (bestCandidate.market) boardSummaryBits.push(String(bestCandidate.market).replace(/_/g, ' '));
+      const bestEdge = fmtSignedPct(bestCandidate.edge);
+      if (bestEdge) boardSummaryBits.push(`edge ${bestEdge}`);
+      if (boardReason) boardSummaryBits.push(boardReason);
+      if (blockerParts.length) boardSummaryBits.push(`needs ${blockerParts.join(' | ')}`);
+      const boardSummary = boardSummaryBits.join(' · ');
       // Format odds
       let oddsTxt = '';
       if (g.sport === 'soccer' && g.home_odds) {
@@ -956,6 +1009,7 @@ function renderAllGames(games) {
           ${basketballProbSummary ? `<div class="game-row-meta" style="font-size:.68rem;color:var(--text3)">${escapeHtml(basketballProbSummary)}</div>` : ''}
           ${nhlProbSummary ? `<div class="game-row-meta" style="font-size:.68rem;color:var(--text3)">${escapeHtml(nhlProbSummary)}</div>` : ''}
           ${mlbProbSummary ? `<div class="game-row-meta" style="font-size:.68rem;color:var(--text3)">${escapeHtml(mlbProbSummary)}</div>` : ''}
+          ${boardSummary ? `<div class="game-row-meta" style="font-size:.68rem;color:var(--text3)"><span class="launch-support-tag ${boardClass}" style="font-size:.58rem;padding:1px 6px">${escapeHtml(boardLabels[boardStatus] || boardStatus)}</span> ${escapeHtml(boardSummary)}</div>` : ''}
         </div>
         ${pickBadge}
         ${oddsTxt ? `<span class="game-row-odds">${oddsTxt}</span>` : ''}
@@ -1653,6 +1707,31 @@ function toggleBetInParlay(idx) {
 function toggleFilter(btn) {
   const filter = btn.dataset.filter;
   const val    = btn.dataset.val;
+  if (filter === 'sport') {
+    const buttons = Array.from(document.querySelectorAll('[data-filter="sport"]'));
+    if (val === 'all') {
+      state.filters.sports = [];
+      state.filters.sport = 'all';
+      buttons.forEach(b => b.classList.toggle('active', b.dataset.val === 'all'));
+    } else {
+      const selected = new Set(Array.isArray(state.filters.sports) ? state.filters.sports : []);
+      if (selected.has(val)) selected.delete(val);
+      else selected.add(val);
+      state.filters.sports = Array.from(selected);
+      state.filters.sport = state.filters.sports.length === 0
+        ? 'all'
+        : state.filters.sports.length === 1
+          ? state.filters.sports[0]
+          : state.filters.sports.join(',');
+      buttons.forEach(b => {
+        const buttonVal = b.dataset.val;
+        b.classList.toggle('active', buttonVal === 'all' ? state.filters.sports.length === 0 : selected.has(buttonVal));
+      });
+    }
+    state.gameSlateExpanded = {};
+    loadPicks();
+    return;
+  }
   document.querySelectorAll(`[data-filter="${filter}"]`).forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   state.filters[filter] = val;
@@ -4485,14 +4564,28 @@ async function autoSettleAll(btn) {
 // ═══════════════════════════════════════════════════════════
 // SCAN
 // ═══════════════════════════════════════════════════════════
-// Single-select toggle (sport + market — only one active at a time)
+// Sport scanning supports a targeted multi-select. "All" is the broad scan mode.
 function toggleScanSingle(btn, group) {
-  document.querySelectorAll(`[data-scan="${group}"]`).forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
   const val = btn.dataset.val;
   if (group === 'sport') {
-    state.scanSports = val === 'all' ? [] : [val];
+    const buttons = Array.from(document.querySelectorAll('[data-scan="sport"]'));
+    if (val === 'all') {
+      state.scanSports = [];
+      buttons.forEach(b => b.classList.toggle('active', b.dataset.val === 'all'));
+    } else {
+      const selected = new Set(state.scanSports || []);
+      if (selected.has(val)) selected.delete(val);
+      else selected.add(val);
+      state.scanSports = Array.from(selected);
+      buttons.forEach(b => {
+        const buttonVal = b.dataset.val;
+        b.classList.toggle('active', buttonVal === 'all' ? state.scanSports.length === 0 : selected.has(buttonVal));
+      });
+    }
+    syncScanOptionAvailability();
   } else if (group === 'market') {
+    document.querySelectorAll(`[data-scan="${group}"]`).forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
     state.scanMarket = val;
   }
 }
@@ -4501,6 +4594,7 @@ function toggleScanSingle(btn, group) {
 function toggleScanFilter(btn) { toggleScanSingle(btn, 'sport'); }
 
 function toggleScanOption(btn) {
+  if (btn.disabled) return;
   btn.classList.toggle('active');
   const val = btn.dataset.val;
   if (val === 'retrain') {
@@ -4518,9 +4612,26 @@ function toggleScanOption(btn) {
   }
 }
 
+function syncScanOptionAvailability() {
+  const forceFreshBtn = document.getElementById('chip-force-fresh-odds');
+  if (!forceFreshBtn) return;
+  const targetedSportsSelected = state.scanSports.length > 0;
+  forceFreshBtn.disabled = !targetedSportsSelected;
+  forceFreshBtn.title = targetedSportsSelected
+    ? 'Fetch live odds for the selected sport(s).'
+    : 'Select one or more specific sports first. Broad all-sport force-fresh scans are blocked to protect quota.';
+  forceFreshBtn.setAttribute('aria-disabled', String(!targetedSportsSelected));
+  if (!targetedSportsSelected) {
+    forceFreshBtn.classList.remove('active');
+    state.scanForceFreshOdds = false;
+  }
+}
+
 async function startScan() {
   const btn = document.getElementById('btn-scan');
   const stopBtn = document.getElementById('btn-stop');
+  const selectedSports = state.scanSports || [];
+  const soccerLeagues = selectedSports.filter(sport => String(sport || '').startsWith('soccer_'));
   btn.disabled = true;
   btn.classList.add('running');
   btn.innerHTML = '<div class="spinner"></div> Scanning…';
@@ -4536,7 +4647,9 @@ async function startScan() {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
-        sport:   state.scanSports.length === 1 ? state.scanSports[0] : 'all',
+        sport:   state.scanSports.length === 1 ? state.scanSports[0] : state.scanSports.length ? 'multi' : 'all',
+        sports:  state.scanSports,
+        soccer_leagues: soccerLeagues,
         market:  state.scanMarket || 'all',
         retrain: state.scanRetrain,
         offline_odds: state.scanOfflineOdds,
@@ -4544,7 +4657,7 @@ async function startScan() {
         lean_context: state.scanLeanContext,
         context_referee: state.scanContextReferee,
         full_soccer_scope: state.scanFullSoccerScope,
-        focused_lanes: state.scanSports.length !== 1,
+        focused_lanes: false,
       }),
     });
   } catch(e) {
@@ -4805,6 +4918,159 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// ═══════════════════════════════════════════════════════════
+// WORLD CUP
+// ═══════════════════════════════════════════════════════════
+async function loadWorldCupPage() {
+  const groupsEl = document.getElementById('wc-groups-grid');
+  if (!groupsEl) return;
+  if (!state.worldCupTeams.length) {
+    groupsEl.innerHTML = '<div style="color:var(--text3);font-size:.85rem">Loading tournament field…</div>';
+  }
+  try {
+    const r = await fetch('/api/world-cup/teams');
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Failed to load World Cup teams');
+    state.worldCupTeams = d.teams || [];
+    state.worldCupMeta = d;
+    renderWorldCupTeams();
+    populateWorldCupTeamSelects();
+  } catch (e) {
+    groupsEl.innerHTML = `<div class="empty-state"><p>${escapeHtml(e.message || e)}</p></div>`;
+  }
+}
+
+function populateWorldCupTeamSelects() {
+  const a = document.getElementById('wc-team-a');
+  const b = document.getElementById('wc-team-b');
+  if (!a || !b) return;
+  const options = state.worldCupTeams.map(team =>
+    `<option value="${escapeHtml(team.team_id)}">${escapeHtml(team.group)} · ${escapeHtml(team.team_name)}</option>`
+  ).join('');
+  a.innerHTML = options;
+  b.innerHTML = options;
+  if (state.worldCupTeams.length > 1) b.selectedIndex = 1;
+}
+
+function renderWorldCupTeams() {
+  const teams = state.worldCupTeams || [];
+  const teamCount = document.getElementById('wc-team-count');
+  const groupCount = document.getElementById('wc-group-count');
+  if (teamCount) teamCount.textContent = teams.length || '—';
+  const groups = [...new Set(teams.map(t => t.group))].sort();
+  if (groupCount) groupCount.textContent = groups.length || '—';
+  const el = document.getElementById('wc-groups-grid');
+  if (!el) return;
+  const byGroup = {};
+  teams.forEach(team => {
+    if (!byGroup[team.group]) byGroup[team.group] = [];
+    byGroup[team.group].push(team);
+  });
+  el.innerHTML = groups.map(group => `
+    <div class="wc-group-card">
+      <div class="wc-group-title">Group ${escapeHtml(group)}</div>
+      ${(byGroup[group] || []).map(team => `
+        <div class="wc-team-row">
+          <span>${escapeHtml(team.draw_position || '')}</span>
+          <strong>${escapeHtml(team.team_name)}</strong>
+          <em>#${escapeHtml(team.fifa_ranking)}</em>
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
+
+async function runWorldCupFixture() {
+  const result = document.getElementById('wc-fixture-result');
+  const teamA = document.getElementById('wc-team-a')?.value;
+  const teamB = document.getElementById('wc-team-b')?.value;
+  if (!result || !teamA || !teamB) return;
+  if (teamA === teamB) {
+    result.innerHTML = '<span style="color:var(--yellow)">Choose two different teams.</span>';
+    return;
+  }
+  result.innerHTML = '<div class="spinner"></div> Running match prediction…';
+  try {
+    const r = await fetch('/api/world-cup/predict', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        team_a: teamA,
+        team_b: teamB,
+        neutral_venue: document.getElementById('wc-neutral')?.checked !== false,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Prediction failed');
+    result.innerHTML = renderWorldCupFixtureResult(d);
+  } catch (e) {
+    result.innerHTML = `<span style="color:var(--red)">${escapeHtml(e.message || e)}</span>`;
+  }
+}
+
+function renderWorldCupFixtureResult(d) {
+  const topScores = (d.top_scores || []).slice(0, 4).map(score =>
+    `<span class="wc-score-chip">${score.team_a_goals}-${score.team_b_goals} ${(Number(score.probability || 0) * 100).toFixed(1)}%</span>`
+  ).join('');
+  return `
+    <div class="wc-match-title">${escapeHtml(d.team_a_name)} vs ${escapeHtml(d.team_b_name)}</div>
+    <div class="wc-prob-grid">
+      <div><span>${(Number(d.prob_team_a_win_90 || 0) * 100).toFixed(1)}%</span><small>${escapeHtml(d.team_a_name)} win</small></div>
+      <div><span>${(Number(d.prob_draw_90 || 0) * 100).toFixed(1)}%</span><small>Draw</small></div>
+      <div><span>${(Number(d.prob_team_b_win_90 || 0) * 100).toFixed(1)}%</span><small>${escapeHtml(d.team_b_name)} win</small></div>
+    </div>
+    <div class="wc-score-row">${topScores || '<span style="color:var(--text3)">No score matrix returned.</span>'}</div>
+  `;
+}
+
+async function runWorldCupSimulation() {
+  const status = document.getElementById('wc-sim-status');
+  if (!status) return;
+  const simulations = Number(document.getElementById('wc-simulations')?.value || 1000);
+  const seed = Number(document.getElementById('wc-seed')?.value || 2026);
+  status.innerHTML = '<div class="spinner"></div> Running tournament simulation…';
+  try {
+    const r = await fetch('/api/world-cup/simulate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ simulations, seed }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Simulation failed');
+    document.getElementById('wc-last-run').textContent = d.version || 'complete';
+    status.innerHTML = `
+      <div><strong>Simulation complete.</strong></div>
+      <div style="color:var(--text3);font-size:.78rem;margin-top:4px">${escapeHtml(d.output_dir || '')}</div>
+    `;
+    renderWorldCupProbabilities(d.top_probabilities || []);
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--red)">${escapeHtml(e.message || e)}</span>`;
+  }
+}
+
+function renderWorldCupProbabilities(rows) {
+  const tbody = document.getElementById('wc-probabilities-tbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text3)">No probability rows returned.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(row => `
+    <tr>
+      <td>${escapeHtml(row.team_name)}</td>
+      <td>${escapeHtml(row.group)}</td>
+      <td>${_wcPct(row.round_of_32_probability)}</td>
+      <td>${_wcPct(row.semi_final_probability)}</td>
+      <td>${_wcPct(row.final_probability)}</td>
+      <td><strong>${_wcPct(row.champion_probability)}</strong></td>
+    </tr>
+  `).join('');
+}
+
+function _wcPct(value) {
+  return `${(Number(value || 0) * 100).toFixed(1)}%`;
 }
 
 function buildAnalysisBetDraft() {
@@ -5370,13 +5636,14 @@ async function loadApis() {
           ${poolRows.length ? `<div class="api-detail" style="margin-top:8px">${poolRows.map(row => {
             const flags = [];
             if (row.selected) flags.push('active');
+            if (row.status === 'quota_exhausted') flags.push('used up');
             if (row.status === 'stale_metadata') flags.push('stale metadata');
             if (row.low_quota) flags.push('low');
             if (row.runtime_available && row.usable) flags.push('runtime');
-            if (row.status === 'runtime_only') flags.push('runtime only');
+            if (row.status === 'runtime_only') flags.push('new / quota unknown');
             return `…${escapeHtml(row.fingerprint || '')}: ${row.remaining ?? '—'}${flags.length ? ` (${flags.join(', ')})` : ''}`;
           }).join('<br>')}</div>` : ''}
-          ${historicalMissing ? `<div class="api-detail" style="margin-top:8px;color:var(--text3)">${historicalMissing} tracked key${historicalMissing === 1 ? '' : 's'} are historical only and not loaded in the current runtime env.</div>` : ''}
+          ${historicalMissing ? `<div class="api-detail" style="margin-top:8px;color:var(--text3)">${historicalMissing} older tracked key${historicalMissing === 1 ? '' : 's'} are not loaded in the current runtime pool.</div>` : ''}
         </div>` : '';
     el.innerHTML = apiCards + poolCard;
     updateApiKeyInputHelp();
@@ -5396,7 +5663,7 @@ function updateApiKeyInputHelp() {
     ? 'Paste one Odds API key per line, or comma-separated…'
     : 'Paste new key here…';
   helpEl.innerHTML = isPool
-    ? 'Use <code>ODDS_API_KEYS</code> for a fresh-key pool. The scanner will pick one key per run and keep the run on that key.'
+    ? 'Paste multiple Odds API keys here. Use <b>Add Odds Keys</b> to append without replacing the pool, or <b>Save</b> to replace <code>ODDS_API_KEYS</code>.'
     : 'For <code>ODDS_API_KEYS</code>, paste comma-separated keys or one key per line.';
 }
 
@@ -5421,6 +5688,50 @@ async function saveApiKey() {
       showToast(d.error || 'Failed', 'error');
     }
   } catch(e) { showToast('Request failed', 'error'); }
+}
+
+async function addOddsApiKeys() {
+  const valueEl = document.getElementById('key-value');
+  const value = valueEl.value.trim();
+  if (!value) { showToast('Paste one or more Odds API keys first', 'error'); return; }
+  try {
+    const r = await fetch('/api/apis/odds-keys/add', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ value }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) {
+      showToast(d.error || 'Failed to add Odds API keys', 'error');
+      return;
+    }
+    showToast(`Added ${d.added_count || 0} Odds API key${(d.added_count || 0) === 1 ? '' : 's'} ✓`, 'success');
+    valueEl.value = '';
+    loadApis();
+    loadDashboard();
+  } catch(e) {
+    showToast('Request failed', 'error');
+  }
+}
+
+async function pruneExhaustedOddsKeys() {
+  try {
+    const r = await fetch('/api/apis/odds-keys/prune-exhausted', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({}),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) {
+      showToast(d.error || 'Failed to retire used-up keys', 'error');
+      return;
+    }
+    showToast(`Retired ${d.removed_count || 0} used-up Odds API key${(d.removed_count || 0) === 1 ? '' : 's'}`, 'success');
+    loadApis();
+    loadDashboard();
+  } catch(e) {
+    showToast('Request failed', 'error');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════

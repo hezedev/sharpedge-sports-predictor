@@ -22,6 +22,8 @@ _GDELT_PAUSED_UNTIL: datetime | None = None
 _GDELT_PAUSE_REASON: str = ""
 _GOOGLE_NEWS_PAUSED_UNTIL: datetime | None = None
 _GOOGLE_NEWS_PAUSE_REASON: str = ""
+_SEARCH_RESULT_CACHE: dict[tuple[str, int], tuple[datetime, list[NewsItem], str | None]] = {}
+_SEARCH_RESULT_CACHE_TTL = timedelta(minutes=20)
 
 
 _SIGNAL_TERMS = (
@@ -296,18 +298,32 @@ def _search_gdelt_doc(query: str, limit: int, timeout: int) -> tuple[list[NewsIt
 
 
 def _search_context(query: str, limit: int, timeout: int) -> tuple[list[NewsItem], str | None]:
+    cache_key = (" ".join(query.lower().split()), limit)
+    cached = _SEARCH_RESULT_CACHE.get(cache_key)
+    now = datetime.now(timezone.utc)
+    if cached and now - cached[0] <= _SEARCH_RESULT_CACHE_TTL:
+        return list(cached[1]), cached[2]
+
     newsapi_items, newsapi_error = _search_newsapi(query, limit=limit, timeout=timeout)
     if newsapi_items:
-        return newsapi_items, None
+        result = (newsapi_items, None)
+        _SEARCH_RESULT_CACHE[cache_key] = (now, *result)
+        return result
     gdelt_items, gdelt_error = _search_gdelt_doc(query, limit=limit, timeout=timeout)
     if gdelt_items:
-        return gdelt_items, None
+        result = (gdelt_items, None)
+        _SEARCH_RESULT_CACHE[cache_key] = (now, *result)
+        return result
     items, error = _search_duckduckgo(query, limit=limit, timeout=timeout)
     if items:
-        return items, error
+        result = (items, error)
+        _SEARCH_RESULT_CACHE[cache_key] = (now, *result)
+        return result
     fallback_items, fallback_error = _search_google_news_rss(query, limit=limit, timeout=timeout)
     if fallback_items:
-        return fallback_items, None
+        result = (fallback_items, None)
+        _SEARCH_RESULT_CACHE[cache_key] = (now, *result)
+        return result
     errors = []
     if error:
         errors.append(error)

@@ -42,6 +42,9 @@
       <button class="nav-item" onclick="showPage('reasoning')">
         <span class="icon">🧠</span> Reasoning
       </button>
+      <button class="nav-item" onclick="showPage('worldcup')">
+        <span class="icon">🏆</span> World Cup
+      </button>
       <div class="nav-section">Tools</div>
       <button class="nav-item" onclick="showPage('scan')">
         <span class="icon">⚡</span> Run Scan
@@ -512,6 +515,96 @@
           </div>
         </div>
       </div><!-- /page-performance -->
+
+      <!-- ══ PAGE: WORLD CUP ══ -->
+      <div class="page" id="page-worldcup">
+        <div class="grid4" style="margin-bottom:20px">
+          <div class="stat-card blue">
+            <div class="stat-label">Tournament Field</div>
+            <div class="stat-value" id="wc-team-count">—</div>
+            <div class="stat-sub">teams loaded</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Groups</div>
+            <div class="stat-value" id="wc-group-count">—</div>
+            <div class="stat-sub">A through L</div>
+          </div>
+          <div class="stat-card green">
+            <div class="stat-label">Model</div>
+            <div class="stat-value" style="font-size:1rem" id="wc-model-status">Ready</div>
+            <div class="stat-sub">team-strength Poisson</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Last Run</div>
+            <div class="stat-value" style="font-size:1rem" id="wc-last-run">—</div>
+            <div class="stat-sub">simulation output</div>
+          </div>
+        </div>
+
+        <div class="grid2" style="margin-bottom:20px">
+          <div class="panel">
+            <div class="panel-header">Fixture Prediction</div>
+            <div class="panel-body">
+              <div class="wc-form-grid">
+                <div class="form-group">
+                  <label>Team A</label>
+                  <select id="wc-team-a"></select>
+                </div>
+                <div class="form-group">
+                  <label>Team B</label>
+                  <select id="wc-team-b"></select>
+                </div>
+              </div>
+              <div class="wc-action-row">
+                <label class="wc-check"><input type="checkbox" id="wc-neutral" checked/> Neutral venue</label>
+                <button class="btn-save" onclick="runWorldCupFixture()">Predict Match</button>
+              </div>
+              <div id="wc-fixture-result" class="wc-result-box">Select two teams to generate a 90-minute match prediction.</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">Tournament Simulation</div>
+            <div class="panel-body">
+              <div class="wc-form-grid">
+                <div class="form-group">
+                  <label>Simulations</label>
+                  <input id="wc-simulations" type="number" min="1" max="5000" value="1000"/>
+                </div>
+                <div class="form-group">
+                  <label>Seed</label>
+                  <input id="wc-seed" type="number" value="2026"/>
+                </div>
+              </div>
+              <div class="wc-action-row">
+                <button class="btn-save" onclick="runWorldCupSimulation()">Run Tournament</button>
+              </div>
+              <div id="wc-sim-status" class="wc-result-box">Run a seeded simulation to update champion and advancement probabilities.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:20px">
+          <div class="panel-header">Champion Probabilities</div>
+          <div class="panel-body">
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>Team</th><th>Group</th><th>R32</th><th>Semi</th><th>Final</th><th>Champion</th></tr></thead>
+                <tbody id="wc-probabilities-tbody">
+                  <tr><td colspan="6" style="color:var(--text3)">No tournament simulation run yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">Group Field</div>
+          <div class="panel-body">
+            <div id="wc-groups-grid" class="wc-groups-grid"></div>
+          </div>
+        </div>
+      </div><!-- /page-worldcup -->
 
       <!-- ══ PAGE: RESULTS ══ -->
       <div class="page" id="page-results">
@@ -1139,6 +1232,7 @@
               <div class="chip-group">
                 <button class="chip active" data-scan="sport" data-val="all" onclick="toggleScanSingle(this,'sport')">All</button>
                 <button class="chip" data-scan="sport" data-val="soccer" onclick="toggleScanSingle(this,'sport')">⚽ Soccer</button>
+                <button class="chip" data-scan="sport" data-val="soccer_fifa_world_cup" onclick="toggleScanSingle(this,'sport')">🏆 World Cup</button>
                 <button class="chip" data-scan="sport" data-val="basketball" onclick="toggleScanSingle(this,'sport')">🏀 NBA</button>
                 <button class="chip" data-scan="sport" data-val="mlb" onclick="toggleScanSingle(this,'sport')">⚾ MLB</button>
                 <button class="chip" data-scan="sport" data-val="nhl" onclick="toggleScanSingle(this,'sport')">🏒 NHL</button>
@@ -1161,9 +1255,8 @@
                 <button class="chip" id="chip-retrain" data-scan="option" data-val="retrain" onclick="toggleScanOption(this)">🔄 Retrain models</button>
                 <button class="chip" id="chip-offline-odds" data-scan="option" data-val="offline_odds" onclick="toggleScanOption(this)">🗂 Saved odds</button>
                 <button class="chip" id="chip-force-fresh-odds" data-scan="option" data-val="force_fresh_odds" onclick="toggleScanOption(this)">💧 Force fresh odds</button>
-                <button class="chip" id="chip-lean-context" data-scan="option" data-val="lean_context" onclick="toggleScanOption(this)">🪶 Lean context</button>
                 <button class="chip" id="chip-context-referee" data-scan="option" data-val="context_referee" onclick="toggleScanOption(this)">🧠 Context referee</button>
-                <button class="chip" id="chip-full-soccer-scope" data-scan="option" data-val="full_soccer_scope" onclick="toggleScanOption(this)">⚽ Full soccer scope</button>
+                <button class="chip active" id="chip-full-soccer-scope" data-scan="option" data-val="full_soccer_scope" onclick="toggleScanOption(this)">⚽ Full soccer scope</button>
               </div>
             </div>
             <button class="btn-scan" id="btn-scan" onclick="startScan()">
@@ -1245,6 +1338,8 @@
               </div>
             </div>
             <button class="btn-save" onclick="saveApiKey()">Save</button>
+            <button class="btn-save" onclick="addOddsApiKeys()" title="Append keys to ODDS_API_KEYS without replacing the existing pool">Add Odds Keys</button>
+            <button class="btn-save" onclick="pruneExhaustedOddsKeys()" title="Remove runtime Odds API keys with 0 tracked requests remaining">Retire Used-Up</button>
           </div>
         </div>
       </div><!-- /page-apis -->

@@ -66,6 +66,7 @@ def test_google_news_rss_pauses_after_timeout(monkeypatch) -> None:
 
 def test_search_context_uses_gdelt_before_google_news(monkeypatch) -> None:
     monkeypatch.delenv("NEWS_API_KEY", raising=False)
+    news_context._SEARCH_RESULT_CACHE.clear()
     monkeypatch.setattr(news_context, "_GDELT_PAUSED_UNTIL", None)
     monkeypatch.setattr(news_context, "_GDELT_PAUSE_REASON", "")
 
@@ -109,6 +110,7 @@ def test_search_context_uses_gdelt_before_google_news(monkeypatch) -> None:
 
 def test_search_context_uses_newsapi_before_scrape_fallbacks(monkeypatch) -> None:
     monkeypatch.setenv("NEWS_API_KEY", "news-key")
+    news_context._SEARCH_RESULT_CACHE.clear()
     fallback_calls = {"gdelt": 0, "duck": 0, "google": 0}
 
     class _NewsAPIResponse:
@@ -140,6 +142,23 @@ def test_search_context_uses_newsapi_before_scrape_fallbacks(monkeypatch) -> Non
     assert error is None
     assert [item.source for item in items] == ["news example"]
     assert fallback_calls == {"gdelt": 0, "duck": 0, "google": 0}
+
+
+def test_search_context_reuses_successful_results_within_scan(monkeypatch) -> None:
+    news_context._SEARCH_RESULT_CACHE.clear()
+    calls = {"count": 0}
+
+    def _newsapi(*args, **kwargs):
+        calls["count"] += 1
+        return [news_context.NewsItem("Team news", "Lineup confirmed", "https://example.com", "example.com")], None
+
+    monkeypatch.setattr(news_context, "_search_newsapi", _newsapi)
+
+    first, _ = news_context._search_context("Alpha FC Beta FC lineup", limit=2, timeout=1)
+    second, _ = news_context._search_context("Alpha FC Beta FC lineup", limit=2, timeout=1)
+
+    assert first == second
+    assert calls["count"] == 1
 
 
 def test_soccer_news_channels_include_lineup_and_availability_sources() -> None:
