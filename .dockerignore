@@ -1,0 +1,38 @@
+# Secrets — never bake these into the image; set as Render env vars instead
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS/editor local files
+.DS_Store
+.vscode/
+.idea/
+.claude/
+.git/
+
+# Historical scan output — regenerated at runtime, not needed in the image
+reports/
+logs/
+webapp/logs/
+
+# Unrelated sibling projects living in this folder
+System/
+world-cup-predictor/
+
+# NOTE: data/models/, data/team_ids.json, and data/cache/ are intentionally
+# NOT excluded here (unlike .gitignore) — the webapp needs the trained model
+# artifacts and team alias map baked into the image, since they're never
+# committed to git.

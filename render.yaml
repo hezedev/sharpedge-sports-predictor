@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: sports-predictor
+    env: image
+    image:
+      url: docker.io/hezedev/sports-predictor:latest
+    plan: starter
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: LOG_LEVEL
+        value: INFO
+      - key: INITIAL_BANKROLL
+        value: "1000.0"
+      - key: FOOTBALL_DATA_API_KEY
+        sync: false
+      - key: API_SPORTS_KEY
+        sync: false
+      - key: RAPIDAPI_KEY
+        sync: false
+      - key: BALLDONTLIE_API_KEY
+        sync: false
+      - key: ODDS_API_KEY
+        sync: false
+      - key: ODDS_API_KEYS
+        sync: false
+      - key: OPENWEATHER_API_KEY
+        sync: false
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+    healthCheckPath: /
