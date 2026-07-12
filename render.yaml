@@ -4,7 +4,9 @@ services:
     runtime: image
     image:
       url: docker.io/hezedev/sports-predictor:latest
-      creds: sports-predictor
+      creds:
+        fromRegistryCreds:
+          name: sports-predictor
     plan: starter
     envVars:
       - key: PORT
