@@ -1,9 +1,10 @@
 services:
   - type: web
     name: sports-predictor
-    env: image
+    runtime: image
     image:
       url: docker.io/hezedev/sports-predictor:latest
+      creds: sports-predictor
     plan: starter
     envVars:
       - key: PORT
