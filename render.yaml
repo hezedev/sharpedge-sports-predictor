@@ -7,7 +7,7 @@ services:
       creds:
         fromRegistryCreds:
           name: sports-predictor
-    plan: starter
+    plan: free
     envVars:
       - key: PORT
         value: 10000
